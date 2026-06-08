@@ -13,20 +13,29 @@ description: >
 End-to-end workflow for characterizing protein sequences, with a dedicated
 antibody sub-workflow. Stages can be run independently or as a full pipeline.
 
+All scripts accept `--json` for machine-readable output; pipe those into
+`compile_report.py` (see Reporting) for a deterministic final report.
+
 ## Stage 1: Physical Properties
 
-Compute MW and pI per chain, and for the assembled complex.
+Compute MW, pI, extinction coefficient / A280, and developability indices
+(instability, aliphatic, GRAVY) per chain, plus the assembled complex.
 
 ```bash
 uv run scripts/analyze_properties.py <input.fasta> \
     [--signal-peptide MGWSCIILFLVATATGVHS] \
     [--complex] \
-    [--disulfide-bonds 18]
+    [--disulfide-bonds 18] \
+    [--json]
 ```
 
 - `--signal-peptide`: Strip N-terminal signal peptide before calculating mature chain properties
 - `--complex`: Sum chains and solve for complex pI (binary search for net charge = 0)
 - `--disulfide-bonds N`: Apply −2.016 Da correction per bond to complex MW
+- Reports **A280 (1 g/L, oxidized)** for concentration measurement, plus
+  instability index (>40 = potentially unstable), aliphatic index, and GRAVY.
+- Inputs are validated: ambiguous/non-standard residues (X/B/Z/U…) fail loudly
+  rather than crashing inside the MW/pI calculation.
 
 ## Stage 2: Antibody Domain Annotation
 
@@ -38,9 +47,39 @@ Run `find_cdrs.py` for each variable domain. Pass raw sequences (no signal pepti
 uv run scripts/find_cdrs.py --vh  EVQLVES...  --name "VH_B"
 uv run scripts/find_cdrs.py --vhh EVQLVES...  --name "VHH_A"
 uv run scripts/find_cdrs.py --vl  DIQMTQ...   --name "VL_C"
+uv run scripts/find_cdrs.py --seq EVQLVES...  --name "X"     # auto-detect chain type
 ```
 
-Uses conserved anchor residues (not fixed Kabat positions). CDR1 and CDR2 are reliable; CDR3 N-terminal boundary may be ±1 residue for some VH sequences and CDR1 may include/exclude a boundary residue depending on the numbering scheme. For precise Kabat/IMGT numbering, use ANARCI (`pip install abnumber` or `conda install -c bioconda anarci`). See `references/antibody-numbering.md` for scheme comparison and VHH-specific notes.
+**Two engines, auto-selected:**
+
+1. **abnumber/ANARCI (preferred)** — true Kabat/IMGT/Chothia numbering. Used
+   automatically when importable. Get it on the fly without a global install:
+   ```bash
+   uv run --with abnumber scripts/find_cdrs.py --vh EVQLVES... --name VH_B --scheme imgt
+   ```
+2. **Anchor regex (fallback)** — no dependency, Kabat-compatible boundaries. The
+   output reports which engine ran. With the fallback, CDR1 and CDR2 are reliable;
+   the CDR3 N-terminal boundary may be ±1 for some VH sequences.
+
+`--scheme {kabat,imgt,chothia}` selects the numbering for the abnumber engine.
+See `references/antibody-numbering.md` for scheme comparison and VHH-specific notes.
+
+### Developability Liability Scan
+
+Run `scan_liabilities.py` on each chain (or the whole FASTA) to flag
+sequence-level chemical/PTM liabilities relevant to manufacturability:
+
+```bash
+uv run scripts/scan_liabilities.py <input.fasta> [--signal-peptide MGW...] [--json]
+uv run scripts/scan_liabilities.py --seq EVQLVES... --name VH_A
+```
+
+Flags N-glycosylation sequons (N-X-S/T), Asn deamidation (NG/NS…), Asp
+isomerization (DG/DS…), Asp-Pro fragmentation, Met/Trp oxidation hotspots, odd
+(unpaired) cysteine counts, and N-terminal pyroglutamate. Severity-ranked;
+positions are 1-based on the mature chain. Cross-reference high-severity hits in
+CDRs against the Stage 2 CDR output — liabilities inside a CDR are the highest
+priority to engineer out.
 
 ### Fc Mutation Mapping
 
@@ -48,12 +87,19 @@ Run `find_mutations.py` with each full heavy chain sequence to identify all
 mutations vs WT IGHG1*01 in EU numbering:
 
 ```bash
-uv run scripts/find_mutations.py "MGWSCIILFLV...ASTKGPSVF..." --label "HC1"
+uv run scripts/find_mutations.py "MGWSCIILFLV...ASTKGPSVF..." --label "HC1" [--json]
 ```
 
-The script auto-detects the ASTKGPSVF constant region anchor. Consult
-`references/antibody-numbering.md` for a table of common therapeutic mutations
-(LALA-PG, KiH, LS, YTE, etc.) to annotate functional significance.
+- Auto-detects the `ASTKGPSVF` (CH1 start) anchor, then **globally aligns** the
+  constant region to the reference — insertions/deletions (engineered hinges,
+  tags, des-K447) no longer cascade into spurious EU-shifted calls.
+- **Auto-annotates** recognised engineering mutations (LALA, LALA-PG, YTE, LS,
+  KiH knob/hole, GASDALIE, SELF…) and reports full vs partial variants.
+- Only an **IgG1** reference is shipped: chains that diverge heavily (likely
+  IgG2/IgG4 or other allotypes) are flagged with a warning so calls aren't
+  mistaken for deliberate engineering. For those, supply the correct isotype.
+
+Consult `references/antibody-numbering.md` for the full mutation table.
 
 ## Stage 3: Homology Search
 
@@ -76,24 +122,60 @@ See `references/structural-prediction.md` for full guidance. Summary:
 
 ```bash
 uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
-    --antibody A B --antigen C --cutoff 5.0
+    --antibody A B --antigen C --cutoff 5.0 \
+    [--cdr-json cdrs.json] [--json]
 ```
 
 Chain IDs (A, B, C…) correspond to the order of sequences in the input FASTA.
 
+- Uses a **KD-tree** (`NeighborSearch`) — fast on full Fab/IgG complexes.
+- Reports **per-residue-pair contacts** (count + minimum distance), not just a
+  flat atom list.
+- `--cdr-json` accepts a `{chain: [{name, seq}]}` map (assemble it from the
+  `find_cdrs.py --json` outputs) to label each paratope residue with its CDR and
+  flag framework-mediated contacts.
+
 ## Reporting
 
-After running all stages, compile results into a Markdown report with these sections:
+Run each stage with `--json`, save the outputs, then assemble them
+deterministically with `compile_report.py`:
 
-1. **Molecular Architecture** — chain composition, targets, binding domains
-2. **Chain Properties** — table: chain name, precursor/mature length, MW, pI
-3. **CDR Annotation** — one sub-section per variable domain; CDR1/2/3 sequences
-4. **Fc Mutations** — EU-numbered mutation table with functional annotation
-5. **Homology Search** — top 3–5 hits per domain; Q-Cov, E-value, % identity, inferred origin
-6. **Structural Predictions** — pTM/ipTM confidence table; interface contact summary
+```bash
+uv run scripts/analyze_properties.py in.fasta --complex --json > props.json
+uv run scripts/find_cdrs.py --vh ... --name VH --json > vh.json
+uv run scripts/find_mutations.py "..." --label HC1 --json > hc1.json
+uv run scripts/scan_liabilities.py in.fasta --json > liab.json
+uv run scripts/analyze_interfaces.py model.cif --antibody A B --antigen C --json > iface.json
 
-Present the report in a concise lab-note style with clear tables and per-domain
-subsections so that the output can be reused in downstream design reviews.
+uv run scripts/compile_report.py --title "mAb-X evaluation" \
+    --properties props.json --cdrs vh.json vl.json \
+    --mutations hc1.json --liabilities liab.json \
+    --interfaces iface.json --homology homology_section.md > report.md
+```
+
+The compiler emits these sections (only for data provided):
+
+1. **Chain Properties** — MW, pI, A280, instability
+2. **CDR Annotation** — CDR1/2/3 per domain, with the engine used
+3. **Fc Mutations** — EU-numbered table with functional annotation
+4. **Developability Liabilities** — severity-ranked per chain
+5. **Homology Search** — passed through as a Markdown section you write from the search results
+6. **Structural Predictions** — paratope/epitope with CDR tags
+
+Prepend a **Molecular Architecture** overview (chain composition, targets,
+binding domains) and present in a concise lab-note style for downstream design
+reviews. Homology search results (Stage 3) have no script, so write that section
+as Markdown and pass it via `--homology`.
+
+## Testing / Setup Check
+
+`tests/smoke_test.sh` runs every script against the committed trastuzumab
+fixtures in `examples/` and asserts key outputs. Use it to confirm `uv` and the
+dependencies work in a fresh environment (e.g. from a SessionStart hook):
+
+```bash
+bash tests/smoke_test.sh
+```
 
 ## Detecting Antibody vs General Protein
 

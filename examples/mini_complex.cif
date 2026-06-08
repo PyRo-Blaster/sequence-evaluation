@@ -1,0 +1,32 @@
+data_mini
+#
+loop_
+_atom_site.group_PDB
+_atom_site.id
+_atom_site.type_symbol
+_atom_site.label_atom_id
+_atom_site.label_alt_id
+_atom_site.label_comp_id
+_atom_site.label_asym_id
+_atom_site.label_entity_id
+_atom_site.label_seq_id
+_atom_site.pdbx_PDB_ins_code
+_atom_site.Cartn_x
+_atom_site.Cartn_y
+_atom_site.Cartn_z
+_atom_site.occupancy
+_atom_site.B_iso_or_equiv
+_atom_site.auth_seq_id
+_atom_site.auth_asym_id
+_atom_site.pdbx_PDB_model_num
+ATOM 1  C CA . ALA A ? 1 ? 0.000  0.000  0.000  1.0 1.0 95  A 1 
+ATOM 2  C CA . ARG A ? 2 ? 3.000  0.000  0.000  1.0 1.0 96  A 1 
+ATOM 3  C CA . TRP A ? 3 ? 6.000  0.000  0.000  1.0 1.0 97  A 1 
+ATOM 4  C CA . ASP A ? 4 ? 9.000  0.000  0.000  1.0 1.0 98  A 1 
+ATOM 5  C CA . TYR A ? 5 ? 12.000 0.000  0.000  1.0 1.0 99  A 1 
+ATOM 6  C CA . GLY A ? 6 ? 15.000 0.000  0.000  1.0 1.0 100 A 1 
+ATOM 7  C CA . GLU B ? 1 ? 6.000  4.000  0.000  1.0 1.0 10  C 1 
+ATOM 8  C CA . LYS B ? 2 ? 9.000  4.000  0.000  1.0 1.0 11  C 1 
+ATOM 9  C CA . SER B ? 3 ? 40.000 40.000 40.000 1.0 1.0 12  C 1 
+ATOM 10 C CA . HIS B ? 4 ? 12.000 4.000  0.000  1.0 1.0 13  C 1 
+#

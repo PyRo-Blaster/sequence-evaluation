@@ -4,13 +4,14 @@
 
 它适合在用户提供 FASTA 文件或氨基酸序列后，快速完成以下工作：
 
-- 计算分子量（MW）和等电点（pI）
-- 识别抗体可变区 CDR
-- 映射 IgG Fc 突变并按 EU 编号解释
+- 计算分子量（MW）、等电点（pI）、消光系数 / A280 以及可开发性指标
+- 识别抗体可变区 CDR（优先使用 abnumber/ANARCI，回退到锚点正则）
+- 映射 IgG Fc 突变并按 EU 编号解释，自动标注常见工程突变
+- 扫描可开发性序列风险（糖基化位点、脱酰胺、异构化、氧化等）
 - 对变量区或一般蛋白做同源序列搜索
 - 组织抗体-抗原复合物结构预测
-- 分析 paratope / epitope 接触残基
-- 汇总为结构化 Markdown 报告
+- 分析 paratope / epitope 接触残基，并映射到 CDR
+- 由各阶段 JSON 输出确定性地汇总为结构化 Markdown 报告
 
 ## 适用场景
 
@@ -35,15 +36,29 @@
 .
 ├── SKILL.md
 ├── README.md
+├── LICENSE
+├── examples/
+│   ├── trastuzumab.fasta        # 测试用曲妥珠单抗序列
+│   ├── mini_complex.cif         # 接触分析用小型复合物
+│   └── mini_cdrs.json
 ├── references/
 │   ├── antibody-numbering.md
+│   ├── developability.md
 │   └── structural-prediction.md
+├── tests/
+│   └── smoke_test.sh            # 端到端冒烟测试
 └── scripts/
+    ├── _common.py               # 共用工具（序列校验 / JSON）
     ├── analyze_interfaces.py
     ├── analyze_properties.py
+    ├── compile_report.py        # 由 JSON 汇总 Markdown 报告
     ├── find_cdrs.py
-    └── find_mutations.py
+    ├── find_mutations.py
+    └── scan_liabilities.py      # 可开发性风险扫描
 ```
+
+所有脚本均支持 `--json` 输出，便于用 `compile_report.py` 自动汇总报告。
+运行 `bash tests/smoke_test.sh` 可在新环境中验证脚本和依赖是否可用。
 
 ## Skill 能力概览
 
@@ -52,9 +67,12 @@
 使用 `scripts/analyze_properties.py` 计算：
 
 - 单链 MW / pI
+- 消光系数与 A280（1 g/L，用于浓度测定）
+- 不稳定指数、脂肪族指数、GRAVY 等可开发性指标
 - 去除信号肽后的成熟链性质
 - 多链复合体总 MW / pI
 - 二硫键对复合体分子量的修正
+- 对非标准氨基酸（X/B/Z/U…）做输入校验，避免计算中途崩溃
 
 示例：
 
@@ -91,7 +109,22 @@ uv run scripts/find_cdrs.py --vl DIQMTQ... --name VL_A
 uv run scripts/find_mutations.py "MGWSCIILFLV...ASTKGPSVF..." --label HC1
 ```
 
-### 4. 同源搜索
+### 4. 可开发性风险扫描
+
+使用 `scripts/scan_liabilities.py` 标注序列层面的化学/翻译后修饰风险：
+
+- N-糖基化位点（N-X-S/T）
+- 脱酰胺（NG/NS…）、异构化（DG/DS…）
+- Asp-Pro 断裂、Met/Trp 氧化热点
+- 未配对半胱氨酸、N 端焦谷氨酸
+
+示例：
+
+```bash
+uv run scripts/scan_liabilities.py input.fasta --json
+```
+
+### 5. 同源搜索
 
 结合 `protein-sequence-similarity-search` skill：
 
@@ -99,7 +132,7 @@ uv run scripts/find_mutations.py "MGWSCIILFLV...ASTKGPSVF..." --label HC1
 - 汇总 top hits、覆盖度、E-value 和 identity
 - 辅助推断来源、家族和相似已知分子
 
-### 5. 结构预测与界面分析
+### 6. 结构预测与界面分析
 
 结合 `chai` 和 `modal` skill：
 
@@ -123,9 +156,10 @@ uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
 1. 运行理化性质分析
 2. 识别 VH / VL / VHH 的 CDR
 3. 检查 Fc 突变及功能含义
-4. 对变量区做同源搜索
-5. 如需结构层面解释，再做复合物预测和界面分析
-6. 输出完整 Markdown 报告
+4. 扫描可开发性序列风险
+5. 对变量区做同源搜索
+6. 如需结构层面解释，再做复合物预测和界面分析
+7. 用 `compile_report.py` 由各阶段 JSON 输出汇总 Markdown 报告
 
 对于一般蛋白，通常只需要：
 
@@ -136,6 +170,7 @@ uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
 
 - [SKILL.md](./SKILL.md): skill 主说明
 - [antibody-numbering.md](./references/antibody-numbering.md): Kabat / IMGT / EU 编号说明
+- [developability.md](./references/developability.md): 可开发性风险说明
 - [structural-prediction.md](./references/structural-prediction.md): Chai-1 结构预测与界面分析说明
 
 ## 使用建议
@@ -147,4 +182,4 @@ uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
 
 ## License
 
-如果你准备将这个 skill 进一步公开分发，建议补充一个明确的开源许可证，例如 `MIT`。
+本项目以 [MIT License](./LICENSE) 发布。
