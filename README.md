@@ -99,15 +99,20 @@ uv run scripts/find_cdrs.py --vl DIQMTQ... --name VL_A
 
 使用 `scripts/find_mutations.py`：
 
-- 对照 WT `IGHG1*01`
-- 使用 EU 编号输出突变位点
-- 方便标注常见工程位点，如 `LALA-PG`、`LS`、`YTE`、`KiH`
+- 自动检测同种型（IgG1 / IgG2 / IgG4），与对应野生型比对
+- 使用 EU 编号输出突变位点（基于全局比对，可正确处理插入/缺失）
+- 自动标注常见工程位点，如 `LALA-PG`、`LS`、`YTE`、`KiH`、IgG4 `S228P`
+- 可用 `--isotype` 指定同种型，或用 `--reference-fasta` 提供权威参考序列
 
 示例：
 
 ```bash
 uv run scripts/find_mutations.py "MGWSCIILFLV...ASTKGPSVF..." --label HC1
+uv run scripts/find_mutations.py "<seq>" --isotype IgG4
 ```
+
+> 说明：内置的 IgG2/IgG4 参考序列依据同种型典型差异重建；仅 IgG1 经审批药物验证。
+> 用于正式/法规场景时建议通过 `--reference-fasta` 提供 IMGT/UniProt 权威序列。
 
 ### 4. 可开发性风险扫描
 

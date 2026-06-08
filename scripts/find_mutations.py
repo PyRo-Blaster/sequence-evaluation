@@ -1,13 +1,25 @@
-"""Map mutations in an IgG heavy-chain constant region vs WT IGHG1*01 (EU numbering).
+"""Map mutations in an IgG heavy-chain constant region vs the wild-type reference
+of its isotype, in EU numbering.
 
-The constant region is located by the conserved ASTKGPSVF (CH1 start) anchor and
-then *globally aligned* to the WT reference, so insertions/deletions in the query
-no longer shift every downstream EU number (the failure mode of naive positional
-comparison). Recognised engineering mutations are annotated automatically, and a
-high divergence count warns when the chain is likely a non-IgG1 isotype/allotype.
+The constant region is located by the conserved ASTKGPSVF (CH1 start) anchor. The
+isotype (IgG1/IgG2/IgG4) is auto-detected by alignment, the query is *globally
+aligned* to that isotype's WT reference (so indels do not shift downstream EU
+numbers), and recognised engineering mutations are annotated automatically.
+
+EU numbering for every reference is derived by aligning it to the verified IgG1
+reference, which is reliable across CH1/CH2/CH3 and the conserved CPxCP hinge core
+(including the IgG4 S228 site). The exact EU numbers of the non-conserved
+N-terminal hinge residues of IgG2/IgG4 are approximate.
+
+Reference data note: only the IgG1 reference is independently validated (it
+reproduces an approved IgG1 therapeutic). The IgG2/IgG4 references are
+reconstructed from canonical isotype differences. For definitive / regulatory
+work pass an authoritative sequence via --reference-fasta.
 
 Usage:
     uv run scripts/find_mutations.py <full_heavy_chain_sequence> [--label HC1] [--json]
+    uv run scripts/find_mutations.py <seq> --isotype IgG4
+    uv run scripts/find_mutations.py <seq> --reference-fasta my_wt.fasta
 
 # /// script
 # requires-python = ">=3.10"
@@ -22,7 +34,8 @@ from Bio.Align import PairwiseAligner
 
 from _common import SequenceError, clean_sequence, emit_json
 
-# WT human IgG1 constant region (IGHG1*01): CH1 + Hinge + CH2 + CH3
+# WT human IgG1 constant region (IGHG1*01): CH1 + Hinge + CH2 + CH3.
+# Validated: VH + this sequence reproduces the trastuzumab heavy chain.
 WT_IgG1_CONST = (
     "ASTKGPSVFPLAPSSKSTSGGTAALGCLVKDYFPEPVTVSWNSGALTSGVHTFPAVLQSSGLYSLSS"
     "VVTVPSSSLGTQTYICNVNHKPSNTKVDKKVEPKSCDKTHTCPPCPAPELLGGPSVFLFPPKPKDTL"
@@ -31,7 +44,32 @@ WT_IgG1_CONST = (
     "ENNYKTTPPVLDSDGSFFLYSKLTVDKSRWQQGNVFSCSVLHEALHNHYTQKSLSLSPGK"
 )
 
-# EU numbering: CH1 118-215, Hinge 216-230, CH2 231-340, CH3 341-447
+# WT human IgG2 (IGHG2*01) and IgG4 (IGHG4*01) constant regions, reconstructed
+# from canonical isotype differences (shorter hinges; CH1/CH2/CH3 substitutions).
+# Best-effort — verify with --reference-fasta for definitive work.
+WT_IgG2_CONST = (
+    "ASTKGPSVFPLAPCSRSTSESTAALGCLVKDYFPEPVTVSWNSGALTSGVHTFPAVLQSSGLYSLSS"
+    "VVTVPSSNFGTQTYTCNVDHKPSNTKVDKTVERKCCVECPPCPAPPVAGPSVFLFPPKPKDTLMISR"
+    "TPEVTCVVVDVSHEDPEVQFNWYVDGVEVHNAKTKPREEQFNSTFRVVSVLTVVHQDWLNGKEYKCK"
+    "VSNKGLPAPIEKTISKTKGQPREPQVYTLPPSREEMTKNQVSLTCLVKGFYPSDIAVEWESNGQPEN"
+    "NYKTTPPMLDSDGSFFLYSKLTVDKSRWQQGNVFSCSVMHEALHNHYTQKSLSLSPGK"
+)
+WT_IgG4_CONST = (
+    "ASTKGPSVFPLAPCSRSTSESTAALGCLVKDYFPEPVTVSWNSGALTSGVHTFPAVLQSSGLYSLSS"
+    "VVTVPSSSLGTKTYTCNVDHKPSNTKVDKRVESKYGPPCPSCPAPEFLGGPSVFLFPPKPKDTLMIS"
+    "RTPEVTCVVVDVSQEDPEVQFNWYVDGVEVHNAKTKPREEQFNSTYRVVSVLTVLHQDWLNGKEYKC"
+    "KVSNKGLPSSIEKTISKAKGQPREPQVYTLPPSQEEMTKNQVSLTCLVKGFYPSDIAVEWESNGQPE"
+    "NNYKTTPPVLDSDGSFFLYSRLTVDKSRWQEGNVFSCSVMHEALHNHYTQKSLSLSLGK"
+)
+
+BUILTIN_REFERENCES = {
+    "IgG1": WT_IgG1_CONST,
+    "IgG2": WT_IgG2_CONST,
+    "IgG4": WT_IgG4_CONST,
+}
+
+# EU numbering for the IgG1 reference (CH1 118-215, Hinge 216-230, CH2 231-340,
+# CH3 341-447). Other isotypes inherit EU numbers via alignment to IgG1.
 EU_NUMBERS: list[int] = (
     list(range(118, 216))   # CH1
     + list(range(216, 231)) # Hinge
@@ -77,6 +115,7 @@ MUTATION_NOTES = {
     "L328F": "SELF enhanced binding",
     "D356E": "EEM allotype",
     "L358M": "EEM allotype",
+    "S228P": "IgG4 hinge stabilization (prevents Fab-arm exchange)",
 }
 
 # Named variants: report present / partial based on the full mutation set.
@@ -89,6 +128,7 @@ NAMED_VARIANTS = {
     "KiH hole": {"T366S", "L368A", "Y407V"},
     "GASDALIE": {"G236A", "S239D", "A330L", "I332E"},
     "SELF": {"S267E", "L328F"},
+    "IgG4 S228P": {"S228P"},
 }
 
 
@@ -104,7 +144,45 @@ def _aligner() -> PairwiseAligner:
     return a
 
 
-def find_mutations(chain_seq: str, label: str) -> dict:
+def eu_array_for(ref_seq: str) -> list[int | None]:
+    """EU number per residue of ``ref_seq``, derived by alignment to IgG1.
+
+    IgG1 returns its canonical numbering directly. For other references each
+    residue inherits the EU number of the IgG1 residue it aligns to; residues
+    aligning to an IgG1 gap (insertions vs IgG1) get None.
+    """
+    if ref_seq == WT_IgG1_CONST:
+        return list(EU_NUMBERS)
+    aln = _aligner().align(WT_IgG1_CONST, ref_seq)[0]
+    igg1_aln, ref_aln = aln[0], aln[1]
+    out: list[int | None] = []
+    igg1_idx = 0
+    for g, r in zip(igg1_aln, ref_aln):
+        if g != "-" and r != "-":
+            out.append(EU_NUMBERS[igg1_idx])
+            igg1_idx += 1
+        elif g != "-":  # gap in ref -> consume an IgG1 position
+            igg1_idx += 1
+        else:  # residue in ref aligned to IgG1 gap (rare for IgG2/4)
+            out.append(None)
+    return out
+
+
+def detect_isotype(const_seq: str, references: dict[str, str]) -> tuple[str, dict[str, float]]:
+    """Return (best isotype name, {name: alignment score})."""
+    aligner = _aligner()
+    scores = {name: float(aligner.score(seq, const_seq)) for name, seq in references.items()}
+    best = max(scores, key=scores.get)
+    return best, scores
+
+
+def find_mutations(
+    chain_seq: str,
+    label: str,
+    isotype: str = "auto",
+    references: dict[str, str] | None = None,
+) -> dict:
+    references = references or BUILTIN_REFERENCES
     anchor = "ASTKGPSVF"
     pos = chain_seq.find(anchor)
     if pos == -1:
@@ -112,34 +190,43 @@ def find_mutations(chain_seq: str, label: str) -> dict:
             f"{label}: could not find constant-region anchor (ASTKGPSVF). "
             "Pass a full heavy chain including CH1."
         )
-
     const_seq = chain_seq[pos:]
-    aln = _aligner().align(WT_IgG1_CONST, const_seq)[0]
-    # aln.aligned -> blocks of (ref_start,ref_end),(qry_start,qry_end)
+
+    scores = None
+    if isotype == "auto":
+        isotype, scores = detect_isotype(const_seq, references)
+    elif isotype not in references:
+        raise SequenceError(f"{label}: unknown isotype '{isotype}' "
+                            f"(have {', '.join(references)})")
+    ref_seq = references[isotype]
+    ref_eu = eu_array_for(ref_seq)
+
+    aln = _aligner().align(ref_seq, const_seq)[0]
     ref_aln, qry_aln = aln[0], aln[1]  # gapped strings, same length
 
     substitutions: list[dict] = []
     deletions: list[dict] = []
     insertions: list[dict] = []
 
-    ref_idx = 0  # index into WT_IgG1_CONST
-    last_eu = EU_NUMBERS[0]
+    ref_idx = 0
+    last_eu = ref_eu[0] or EU_NUMBERS[0]
     for r, q in zip(ref_aln, qry_aln):
         if r != "-" and q != "-":
-            eu = EU_NUMBERS[ref_idx]
-            last_eu = eu
-            if r != q:
-                mut = f"{r}{eu}{q}"
-                substitutions.append({
-                    "eu": eu, "wt": r, "mut": q, "domain": domain_for(eu),
-                    "mutation": mut, "note": MUTATION_NOTES.get(mut, ""),
-                })
+            eu = ref_eu[ref_idx]
+            if eu is not None:
+                last_eu = eu
+                if r != q:
+                    mut = f"{r}{eu}{q}"
+                    substitutions.append({
+                        "eu": eu, "wt": r, "mut": q, "domain": domain_for(eu),
+                        "mutation": mut, "note": MUTATION_NOTES.get(mut, ""),
+                    })
             ref_idx += 1
         elif q == "-":  # residue present in WT, missing in query -> deletion
-            eu = EU_NUMBERS[ref_idx]
-            last_eu = eu
-            # A clean C-terminal truncation (e.g. des-K447) is expected; record it.
-            deletions.append({"eu": eu, "wt": r, "domain": domain_for(eu)})
+            eu = ref_eu[ref_idx]
+            if eu is not None:
+                last_eu = eu
+                deletions.append({"eu": eu, "wt": r, "domain": domain_for(eu)})
             ref_idx += 1
         else:  # r == "-" : extra residue in query -> insertion after last_eu
             insertions.append({"after_eu": last_eu, "residue": q})
@@ -155,44 +242,51 @@ def find_mutations(chain_seq: str, label: str) -> dict:
             variants_partial.append({"name": name, "have": have,
                                      "missing": sorted(members - mut_set)})
 
-    # Drop pure C-terminal truncation deletions from the "warning" divergence
-    # count; only interior deletions are unusual.
-    interior_del = [d for d in deletions if d["eu"] < EU_NUMBERS[-1]]
+    eu_last = next((e for e in reversed(ref_eu) if e is not None), EU_NUMBERS[-1])
+    interior_del = [d for d in deletions if d["eu"] < eu_last]
     divergence = len(substitutions) + len(interior_del) + len(insertions)
-    likely_non_igg1 = divergence > 20
+    # After choosing the right isotype, lots of leftover divergence suggests an
+    # unusual allotype or a reference mismatch.
+    high_divergence = divergence > 20
 
     return {
         "label": label,
+        "isotype": isotype,
+        "isotype_scores": scores,
         "substitutions": substitutions,
         "deletions": deletions,
         "insertions": insertions,
         "variants_present": variants_present,
         "variants_partial": variants_partial,
         "divergence": divergence,
-        "likely_non_igg1": likely_non_igg1,
+        "high_divergence": high_divergence,
     }
 
 
 def report(result: dict) -> None:
     label = result["label"]
     subs = result["substitutions"]
-    print(f"\n{label} — {len(subs)} substitution(s) vs WT IGHG1*01:")
+    iso = result["isotype"]
+    print(f"\n{label} — isotype {iso}; {len(subs)} substitution(s) vs WT {iso}:")
+    if result.get("isotype_scores"):
+        ranked = sorted(result["isotype_scores"].items(), key=lambda x: -x[1])
+        print("  isotype match scores: " + ", ".join(f"{n} {s:.0f}" for n, s in ranked))
 
-    if result["likely_non_igg1"]:
-        print("  [!] High divergence from IgG1 — this chain may be IgG2/IgG4 or a "
-              "different allotype. Only an IgG1 reference is shipped, so individual "
-              "calls below may be artifacts of isotype, not true engineering.")
+    if result["high_divergence"]:
+        print("  [!] High residual divergence even against the best isotype — may be "
+              "an unusual allotype or a reference mismatch. Consider --reference-fasta.")
 
     if not subs:
-        print("  (none — wild-type IgG1 constant region)")
+        print(f"  (none — wild-type {iso} constant region)")
     else:
         print(f"  {'EU #':>6}  {'Domain':<7}  {'Mut':<8}  Annotation")
         print(f"  {'------':>6}  {'-------':<7}  {'--------':<8}  ----------")
         for s in subs:
             print(f"  {s['eu']:>6}  {s['domain']:<7}  {s['mutation']:<8}  {s['note']}")
 
+    eu_last = EU_NUMBERS[-1]
     for d in result["deletions"]:
-        tag = "C-terminal clip" if d["eu"] == EU_NUMBERS[-1] else "interior deletion"
+        tag = "C-terminal clip" if d["eu"] == eu_last else "interior deletion"
         print(f"  - deletion: {d['wt']}{d['eu']} ({d['domain']}, {tag})")
     for ins in result["insertions"]:
         print(f"  - insertion: +{ins['residue']} after EU {ins['after_eu']}")
@@ -209,12 +303,35 @@ def main() -> None:
     )
     parser.add_argument("sequence", help="Full heavy chain amino acid sequence")
     parser.add_argument("--label", default="Heavy Chain", help="Label for display")
+    parser.add_argument("--isotype", default="auto",
+                        choices=["auto", "IgG1", "IgG2", "IgG4"],
+                        help="Reference isotype (default: auto-detect)")
+    parser.add_argument("--reference-fasta",
+                        help="Custom WT constant-region FASTA to compare against "
+                             "(overrides built-in references; recommended for "
+                             "definitive IgG2/IgG4 work)")
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     args = parser.parse_args()
 
+    references = dict(BUILTIN_REFERENCES)
+    isotype = args.isotype
+    if args.reference_fasta:
+        from Bio import SeqIO
+        rec = next(iter(SeqIO.parse(args.reference_fasta, "fasta")), None)
+        if rec is None:
+            print(f"[!] no sequence in {args.reference_fasta}", file=sys.stderr)
+            sys.exit(1)
+        try:
+            custom = clean_sequence(str(rec.seq), name="reference")
+        except SequenceError as e:
+            print(f"[!] {e}", file=sys.stderr)
+            sys.exit(1)
+        references = {"custom": custom}
+        isotype = "custom"
+
     try:
         seq = clean_sequence(args.sequence, name=args.label)
-        result = find_mutations(seq, args.label)
+        result = find_mutations(seq, args.label, isotype=isotype, references=references)
     except SequenceError as e:
         print(f"[!] {e}", file=sys.stderr)
         sys.exit(1)

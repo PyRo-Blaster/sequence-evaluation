@@ -68,10 +68,11 @@ def section_mutations(out, items):
     out.append("## Fc Mutations (EU numbering)\n")
     for d in items:
         subs = d.get("substitutions", [])
-        out.append(f"### {d['label']} — {len(subs)} substitution(s) vs WT IGHG1*01\n")
-        if d.get("likely_non_igg1"):
-            out.append("> ⚠️ High divergence from IgG1 — chain may be a different "
-                       "isotype/allotype; calls below may be artifacts.\n")
+        iso = d.get("isotype", "IgG1")
+        out.append(f"### {d['label']} — isotype {iso}; {len(subs)} substitution(s) vs WT {iso}\n")
+        if d.get("high_divergence"):
+            out.append("> ⚠️ High residual divergence even against the best isotype — "
+                       "may be an unusual allotype or reference mismatch.\n")
         if subs:
             out.append("| EU # | Domain | Mutation | Annotation |")
             out.append("|------|--------|----------|------------|")

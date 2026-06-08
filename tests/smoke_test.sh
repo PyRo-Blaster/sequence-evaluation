@@ -23,12 +23,14 @@ command -v uv >/dev/null 2>&1 || fail "uv not found on PATH"
 VL=DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYTTPPTFGQGTKVEIK
 HC_LALA=$(awk '/HC_LALA/{f=1;next} /^>/{f=0} f' "$FASTA" | tr -d '\n')
 HC_WT=$(awk '/HC_full/{f=1;next} /^>/{f=0} f' "$FASTA" | tr -d '\n')
+HC_IGG4=$(awk '/IgG4_WT/{f=1;next} /^>/{f=0} f' "$FASTA" | tr -d '\n')
+HC_IGG4_S228P=$(awk '/IgG4_S228P/{f=1;next} /^>/{f=0} f' "$FASTA" | tr -d '\n')
 
 echo "[1/6] analyze_properties.py"
 uv run scripts/analyze_properties.py "$FASTA" --json > "$TMP/props.json"
-python3 -c "import json,sys; d=json.load(open('$TMP/props.json')); assert len(d['chains'])==5, d; assert d['chains'][0]['a280_oxidized']>0" \
+python3 -c "import json,sys; d=json.load(open('$TMP/props.json')); assert len(d['chains'])==7, d; assert d['chains'][0]['a280_oxidized']>0" \
   || fail "properties json malformed"
-pass "5 chains, A280 computed"
+pass "7 chains, A280 computed"
 
 echo "[2/6] find_cdrs.py (VL)"
 uv run scripts/find_cdrs.py --vl "$VL" --name VL --json > "$TMP/vl.json"
@@ -40,10 +42,21 @@ echo "[3/6] find_mutations.py (WT + LALA annotation)"
 uv run scripts/find_mutations.py "$HC_WT" --label WT --json > "$TMP/wt.json"
 python3 -c "import json; d=json.load(open('$TMP/wt.json')); assert d['substitutions']==[], d" \
   || fail "WT IgG1 should have 0 substitutions"
+python3 -c "import json; d=json.load(open('$TMP/wt.json')); assert d['isotype']=='IgG1', d['isotype']" \
+  || fail "WT not detected as IgG1"
 uv run scripts/find_mutations.py "$HC_LALA" --label LALA --json > "$TMP/lala.json"
 python3 -c "import json; d=json.load(open('$TMP/lala.json')); m={s['mutation'] for s in d['substitutions']}; assert m=={'L234A','L235A'}, m; assert 'LALA' in d['variants_present']" \
   || fail "LALA not detected/annotated"
-pass "WT=0 subs; LALA detected and annotated"
+pass "WT=0 subs (IgG1); LALA detected and annotated"
+
+echo "[3b/6] find_mutations.py isotype awareness (IgG4 + S228P)"
+uv run scripts/find_mutations.py "$HC_IGG4" --label IgG4 --json > "$TMP/igg4.json"
+python3 -c "import json; d=json.load(open('$TMP/igg4.json')); assert d['isotype']=='IgG4', d['isotype']; assert d['substitutions']==[], d['substitutions']" \
+  || fail "IgG4 WT not auto-detected as clean IgG4"
+uv run scripts/find_mutations.py "$HC_IGG4_S228P" --label IgG4P --json > "$TMP/igg4p.json"
+python3 -c "import json; d=json.load(open('$TMP/igg4p.json')); assert d['isotype']=='IgG4'; subs=d['substitutions']; assert len(subs)==1 and subs[0]['mutation']=='S228P' and subs[0]['eu']==228, subs" \
+  || fail "IgG4 S228P not detected at EU 228"
+pass "IgG4 auto-detected; S228P called at EU 228"
 
 echo "[4/6] scan_liabilities.py"
 uv run scripts/scan_liabilities.py "$FASTA" --json > "$TMP/liab.json"

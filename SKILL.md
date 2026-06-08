@@ -84,20 +84,29 @@ priority to engineer out.
 ### Fc Mutation Mapping
 
 Run `find_mutations.py` with each full heavy chain sequence to identify all
-mutations vs WT IGHG1*01 in EU numbering:
+mutations vs the wild-type reference of its isotype, in EU numbering:
 
 ```bash
 uv run scripts/find_mutations.py "MGWSCIILFLV...ASTKGPSVF..." --label "HC1" [--json]
+uv run scripts/find_mutations.py "<seq>" --isotype IgG4              # force isotype
+uv run scripts/find_mutations.py "<seq>" --reference-fasta wt.fasta  # custom WT
 ```
 
 - Auto-detects the `ASTKGPSVF` (CH1 start) anchor, then **globally aligns** the
   constant region to the reference — insertions/deletions (engineered hinges,
   tags, des-K447) no longer cascade into spurious EU-shifted calls.
+- **Isotype-aware**: auto-detects IgG1/IgG2/IgG4 by alignment and compares
+  against that isotype's WT, so an unmodified IgG4 reports 0 mutations (not ~30).
+  Override with `--isotype` if needed.
+- EU numbering is reliable across CH1/CH2/CH3 and the conserved CPxCP hinge core
+  (including the IgG4 **S228P** site); the exact EU numbers of the non-conserved
+  N-terminal IgG2/IgG4 hinge residues are approximate.
 - **Auto-annotates** recognised engineering mutations (LALA, LALA-PG, YTE, LS,
-  KiH knob/hole, GASDALIE, SELF…) and reports full vs partial variants.
-- Only an **IgG1** reference is shipped: chains that diverge heavily (likely
-  IgG2/IgG4 or other allotypes) are flagged with a warning so calls aren't
-  mistaken for deliberate engineering. For those, supply the correct isotype.
+  KiH knob/hole, GASDALIE, SELF, IgG4 S228P…) and reports full vs partial variants.
+- **Reference data caveat:** only the IgG1 reference is independently validated
+  (it reproduces an approved IgG1 therapeutic). The IgG2/IgG4 references are
+  reconstructed from canonical isotype differences. For definitive / regulatory
+  work, pass an authoritative IMGT/UniProt sequence via `--reference-fasta`.
 
 Consult `references/antibody-numbering.md` for the full mutation table.
 
