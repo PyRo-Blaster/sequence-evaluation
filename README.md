@@ -156,7 +156,8 @@ uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
 
 ## 计算资源与后端选择
 
-在运行任何结构预测 / 机器学习阶段前，先检测本机资源并据此选择后端：
+纯序列分析（理化性质、CDR、突变、可开发性、界面几何）无需此步骤。仅在即将运行
+GPU/机器学习阶段时执行一次（每个会话一次，结果可复用）：
 
 ```bash
 uv run scripts/detect_resources.py

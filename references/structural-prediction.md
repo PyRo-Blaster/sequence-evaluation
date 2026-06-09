@@ -7,9 +7,10 @@ binding modes, paratopes, and epitopes. The primary tool is **Chai-1** via Modal
 (same setup used in the T002 trispecific antibody workflow). AlphaFold3 or
 Boltz-1 are alternatives.
 
-## Choosing a backend (run Stage 0 first)
+## Choosing a backend (run the pre-flight once)
 
-Cofolding is GPU-required. Run `scripts/detect_resources.py` and route the job:
+Cofolding is GPU-required. The first time you reach a GPU stage in a session, run
+`scripts/detect_resources.py` once and reuse the result to route the job:
 
 | Local resource | Recommended backend |
 |----------------|--------------------|

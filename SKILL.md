@@ -16,10 +16,13 @@ antibody sub-workflow. Stages can be run independently or as a full pipeline.
 All scripts accept `--json` for machine-readable output; pipe those into
 `compile_report.py` (see Reporting) for a deterministic final report.
 
-## Stage 0: Compute Resource Pre-flight
+## Compute Resource Pre-flight (conditional — not every run)
 
-Before running any structure-prediction or ML stage, detect what the local
-machine can handle and route each job accordingly. **Do not assume a GPU.**
+**Skip this entirely for sequence-only work** (Stages 1–3, liabilities,
+interface geometry — all CPU-light and always local). Run it **only when you are
+about to start a GPU/ML stage** (cofolding, Fv structure modeling, language
+models) **and only once per session** — cache the result and reuse it; the
+hardware does not change between calls.
 
 ```bash
 uv run scripts/detect_resources.py [--json]
@@ -154,8 +157,8 @@ are incomplete, resolve accessions with the `uniprot-database` skill.
 
 ## Stage 4: Structural Prediction & Interface Analysis
 
-This is a `cofold_heavy` (GPU-required) job — run **Stage 0** first and route per
-its recommendation (local GPU / Modal / web server). See
+This is a `cofold_heavy` (GPU-required) job — run the compute pre-flight (once
+per session) and route per its recommendation (local GPU / Modal / web server). See
 `references/structural-prediction.md` for full guidance. Summary:
 
 1. **Prepare FASTAs** — one FASTA per complex (VHH + antigen, Fab VH + VL + antigen, etc.)
