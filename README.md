@@ -154,6 +154,23 @@ uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
   --cutoff 5.0
 ```
 
+## 计算资源与后端选择
+
+在运行任何结构预测 / 机器学习阶段前，先检测本机资源并据此选择后端：
+
+```bash
+uv run scripts/detect_resources.py
+```
+
+它会报告 GPU（NVIDIA / Apple MPS）、CPU、内存、Modal CLI 与网络状况，并按任务类型给出建议：
+
+- 轻量 CPU 任务（理化性质、CDR、突变、可开发性、界面几何）→ **始终本地**
+- 抗体结构建模（IgFold/ImmuneBuilder 等）→ 有 GPU 用本地；否则 CPU（较慢）或远程
+- 复合物 cofolding（Chai-1/Boltz/AF3，**需要 GPU**）→ 本地显存足够则本地；否则 **Modal**；再否则 **Web API/服务器**
+
+> 原则：GPU 密集任务在本机不具备条件时，使用 Modal 或在线服务（如 AlphaFold3 server）；
+> 对敏感序列优先本地或 Modal，避免发送到第三方。
+
 ## 推荐工作流
 
 对于抗体序列，通常按这个顺序使用：
