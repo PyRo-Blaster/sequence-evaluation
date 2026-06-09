@@ -71,6 +71,26 @@ VHH domains differ from VH in Framework 2 (Kabat positions 44–47):
 
 The `find_cdrs.py` script handles VHH identically to VH — the CDR boundaries are the same.
 
+## Isotype Differences (IgG1 / IgG2 / IgG4)
+
+`find_mutations.py` ships WT references for IgG1, IgG2 and IgG4 and auto-detects
+the isotype by alignment. EU numbering is inherited from IgG1 via alignment, so
+CH1/CH2/CH3 and the conserved CPxCP hinge core are reliable; the non-conserved
+N-terminal hinge residues of IgG2/IgG4 are approximate.
+
+| Isotype | Core hinge | Lower hinge (EU 233–238) | Notes |
+|---------|-----------|--------------------------|-------|
+| IgG1 | `...CPPCP` (C226, C229) | `ELLGGP` | Most common; strong effector function |
+| IgG2 | `ERKCCVECPPCP` (4 hinge Cys) | `PVAGP` | Reduced effector; rigid hinge |
+| IgG4 | `ESKYGPPCPSCP` | `EFLGGP` (F234) | Anti-inflammatory; **S228P** prevents Fab-arm exchange |
+
+The famous IgG4 **S228P** stabilizing mutation sits in the CPSCP→CPPCP hinge core
+and is numbered correctly (EU 228) because that motif aligns cleanly to IgG1.
+
+> The built-in IgG2/IgG4 references are reconstructed from canonical isotype
+> differences. For definitive work supply an authoritative sequence (IMGT
+> IGHG2*01 / IGHG4*01, or UniProt P01859 / P01861) via `--reference-fasta`.
+
 ## Chain Types and Constant Domains
 
 | Chain | Constant Region | Isotype marker |
