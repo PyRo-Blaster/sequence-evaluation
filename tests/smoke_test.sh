@@ -80,4 +80,10 @@ grep -q "## Chain Properties" "$TMP/report.md" || fail "report missing propertie
 grep -q "LALA" "$TMP/report.md" || fail "report missing LALA annotation"
 pass "report compiled with all sections"
 
+echo "[pre-flight] detect_resources.py"
+uv run scripts/detect_resources.py --json --no-network-check > "$TMP/res.json"
+python3 -c "import json; d=json.load(open('$TMP/res.json')); r=d['recommendations']; assert set(r)=={'cpu_light','ab_structure','plm_embed','cofold_heavy'}, r; assert r['cpu_light']['backend']=='local'" \
+  || fail "resource detector output malformed"
+pass "resource detector reports backends for all job classes"
+
 echo "ALL SMOKE TESTS PASSED"

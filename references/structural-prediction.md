@@ -7,6 +7,23 @@ binding modes, paratopes, and epitopes. The primary tool is **Chai-1** via Modal
 (same setup used in the T002 trispecific antibody workflow). AlphaFold3 or
 Boltz-1 are alternatives.
 
+## Choosing a backend (run the pre-flight once)
+
+Cofolding is GPU-required. The first time you reach a GPU stage in a session, run
+`scripts/detect_resources.py` once and reuse the result to route the job:
+
+| Local resource | Recommended backend |
+|----------------|--------------------|
+| GPU with ~16 GB+ VRAM | Run Chai-1 / Boltz locally |
+| No/small GPU, Modal CLI configured | Offload to Modal (`chai` + `modal` skills) |
+| No GPU, no Modal, network available | Web server: AlphaFold3 server, HelixFold-Multimer |
+| None of the above | Report `blocked`; do not attempt locally (will OOM/hang) |
+
+Web servers impose limits (e.g. AlphaFold3 server ~20 jobs/day) and send the
+sequence to a third party — avoid for sensitive sequences; prefer Modal or local.
+For unbound Fv/VHH modeling (the `ab_structure` class) IgFold/ImmuneBuilder run
+acceptably on CPU for a handful of sequences; reserve GPU/Modal for cofolding.
+
 ## Chai-1 via Modal
 
 Chai-1 is a multi-chain structure prediction model that accepts multi-sequence

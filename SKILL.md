@@ -16,6 +16,41 @@ antibody sub-workflow. Stages can be run independently or as a full pipeline.
 All scripts accept `--json` for machine-readable output; pipe those into
 `compile_report.py` (see Reporting) for a deterministic final report.
 
+## Compute Resource Pre-flight (conditional — not every run)
+
+**Skip this entirely for sequence-only work** (Stages 1–3, liabilities,
+interface geometry — all CPU-light and always local). Run it **only when you are
+about to start a GPU/ML stage** (cofolding, Fv structure modeling, language
+models) **and only once per session** — cache the result and reuse it; the
+hardware does not change between calls.
+
+```bash
+uv run scripts/detect_resources.py [--json]
+```
+
+It reports GPU (NVIDIA / Apple MPS), CPU, RAM, Modal CLI availability, and
+network egress, then recommends a backend per job class:
+
+| Job class | Tools | Routing rule |
+|-----------|-------|--------------|
+| `cpu_light` | properties, CDRs (regex), mutations, liabilities, interface geometry, ANARCI/abnumber, IgBLAST, BioPhi/OASis | **always local** — no GPU needed |
+| `ab_structure` | IgFold, ImmuneBuilder, ABodyBuilder3, NanoBodyBuilder2, TAP | local GPU if present; else local CPU (slower, fine for a few sequences); else remote |
+| `plm_embed` | AbLang, AntiBERTy, language-model scores | local GPU if present; CPU acceptable for small batches |
+| `cofold_heavy` | Chai-1, Boltz-1/2, AlphaFold3, RFdiffusion/RFantibody, BindCraft | **GPU-required**: local GPU only if VRAM is sufficient (~16 GB+); else **Modal**; else a **web API/server** |
+
+Decision flow for a GPU-required job:
+
+1. **Local GPU with enough VRAM** → run locally.
+2. **No/insufficient local GPU, Modal configured** → offload via the `modal` skill.
+3. **No GPU, no Modal, network available** → use a hosted server (AlphaFold3
+   server, SAbPred webapps, HelixFold web) — see `references/structural-prediction.md`.
+4. **None of the above** → report `blocked`; tell the user what to enable rather
+   than attempting a job that will OOM or hang.
+
+Honour explicit user overrides (e.g. "force local" / "use Modal") over the
+auto-recommendation, and prefer a slower-but-local path over sending sequences to
+an external service when the data is sensitive.
+
 ## Stage 1: Physical Properties
 
 Compute MW, pI, extinction coefficient / A280, and developability indices
@@ -122,10 +157,14 @@ are incomplete, resolve accessions with the `uniprot-database` skill.
 
 ## Stage 4: Structural Prediction & Interface Analysis
 
-See `references/structural-prediction.md` for full guidance. Summary:
+This is a `cofold_heavy` (GPU-required) job — run the compute pre-flight (once
+per session) and route per its recommendation (local GPU / Modal / web server). See
+`references/structural-prediction.md` for full guidance. Summary:
 
 1. **Prepare FASTAs** — one FASTA per complex (VHH + antigen, Fab VH + VL + antigen, etc.)
-2. **Run Chai-1 in parallel** via Modal (use the `chai` skill together with the `modal` skill)
+2. **Run the cofolding model on the backend Stage 0 chose** — Chai-1 via Modal
+   (the `chai` + `modal` skills) when offloading; locally if a capable GPU is
+   present; or a web server (AlphaFold3 server, HelixFold) if no GPU/Modal
 3. **Check scores** — select best model by aggregate score (0.2×pTM + 0.8×ipTM); ipTM > 0.5 is confident
 4. **Analyze interface** with `analyze_interfaces.py`:
 
