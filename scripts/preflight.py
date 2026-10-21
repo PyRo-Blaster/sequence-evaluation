@@ -48,7 +48,8 @@ PACKAGES = [
     {"module": "numpy",     "pip": "numpy>=1.26",     "tier": "required",
      "purpose": "interface distance math"},
     {"module": "abnumber",  "pip": "abnumber",        "tier": "antibody",
-     "purpose": "ANARCI Kabat/IMGT/Chothia CDR numbering (else regex fallback)"},
+     "purpose": "ANARCI Kabat/IMGT/Chothia CDR numbering (else regex fallback); "
+                "HEAVY: pulls anarcii+PyTorch, multi-GB first install"},
     {"module": "modal",     "pip": "modal",           "tier": "backend",
      "purpose": "cloud GPU for Chai-1 / Boltz cofolding"},
     {"module": "torch",     "pip": "torch",           "tier": "local-gpu",
@@ -304,8 +305,11 @@ def action_items(uv_ok, pkgs, modal_ready, rec) -> list[str]:
             todo.append(f"REQUIRED {p['module']}: pip install '{p['pip']}' "
                         f"(or install uv so scripts self-provision)")
         elif p["tier"] == "antibody":
-            todo.append(f"Optional {p['module']} ({p['purpose']}): "
-                        f"uv run --with abnumber scripts/find_cdrs.py ...")
+            todo.append(
+                f"Optional {p['module']}: only needed for exact ANARCI numbering; "
+                "the regex fallback handles standard and YFC-style frameworks. "
+                "First install pulls anarcii+PyTorch (multi-GB, can take tens of "
+                "minutes): uv run --with abnumber scripts/find_cdrs.py ...")
     if rec["cofold_heavy"]["backend"] in ("modal-setup", "blocked", "web-api"):
         if not any(p["module"] == "modal" and p["installed"] for p in pkgs):
             todo.append("Cloud GPU for Chai-1/Boltz: pip install modal  (then `modal token new`)")
