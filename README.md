@@ -5,7 +5,9 @@
 它适合在用户提供 FASTA 文件或氨基酸序列后，快速完成以下工作：
 
 - 计算分子量（MW）、等电点（pI）、消光系数 / A280 以及可开发性指标
-- 识别抗体可变区 CDR（优先使用 abnumber/ANARCI，回退到锚点正则）
+- 识别抗体可变区 CDR（可用时优先 abnumber/ANARCI，否则回退到锚点正则）
+  - 注意：ANARCI 不在 PyPI 上（需 `conda install -c bioconda anarci` + HMMER）。
+    仅安装 `abnumber` 不足以启用，脚本会检测到并回退到正则锚点并给出提示。
 - 映射 IgG Fc 突变并按 EU 编号解释，自动标注常见工程突变
 - 扫描可开发性序列风险（糖基化位点、脱酰胺、异构化、氧化等）
 - 在已有预测结构上标记 charged patch 与疏水表面 patch（不是 TAP / SAP）
@@ -193,7 +195,7 @@ uv run scripts/preflight.py --check-network  # 另外探测外网连通性
 ```
 
 检查内容：`uv` 是否可用；Modal CLI 是否安装**并已认证**；`biopython`/`numpy`（由 uv
-按脚本内联依赖自动安装）、可选的 `abnumber`、以及 `modal`/`torch`/`chai_lab`/`boltz`；
+按脚本内联依赖自动安装）、可选的 `abnumber`/`anarci`、以及 `modal`/`torch`/`chai_lab`/`boltz`；
 GPU 型号与显存、CPU 核数、内存。缺什么会直接给出安装命令；所有必需项满足时退出码为 0。
 
 它会报告 GPU（NVIDIA / Apple MPS）、CPU、内存、Modal CLI 与网络状况，并按任务类型给出建议：

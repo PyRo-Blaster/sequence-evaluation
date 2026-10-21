@@ -136,10 +136,18 @@ uv run scripts/find_cdrs.py --seq EVQLVES...  --name "X"     # auto-detect chain
 
 **Two engines, auto-selected:**
 
-1. **abnumber/ANARCI (preferred)** — true Kabat/IMGT/Chothia numbering. Used
-   automatically when importable. Get it on the fly without a global install:
+1. **abnumber/ANARCI (preferred when available)** — true Kabat/IMGT/Chothia
+   numbering, used automatically when usable. **It needs two pieces**: the
+   `abnumber` wrapper *and* the ANARCI backend it calls at runtime. ANARCI is
+   **not on PyPI** (conda-only, needs HMMER), so `pip install abnumber` /
+   `uv run --with abnumber` on its own is **not** enough — `Chain()` then raises
+   `No module named 'anarci'`. `find_cdrs.py` detects exactly that and falls
+   back to the regex anchors **with an explanatory note**, rather than failing.
+   To actually enable it:
    ```bash
-   uv run --with abnumber scripts/find_cdrs.py --vh EVQLVES... --name VH_B --scheme imgt
+   conda install -c bioconda anarci   # backend (required)
+   pip install abnumber               # wrapper
+   uv run scripts/find_cdrs.py --vh EVQLVES... --name VH_B --scheme imgt
    ```
 2. **Anchor regex (fallback)** — no dependency, Kabat-compatible boundaries. The
    output reports which engine ran. CDR3 is anchored on the **conserved Cys**
