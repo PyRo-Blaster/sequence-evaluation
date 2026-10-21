@@ -189,11 +189,26 @@ assert d['antibody_chains']==['A'], d
 grep -q "^>VHH|A" "$TMP/nb.fasta" || fail "staged FASTA missing chain-id header"
 pass "Fab -> Chai-1, VHH -> Boltz-1; chain IDs staged"
 
-echo "[pre-flight] detect_resources.py"
-uv run scripts/detect_resources.py --json --no-network-check > "$TMP/res.json"
-python3 -c "import json; d=json.load(open('$TMP/res.json')); r=d['recommendations']; assert set(r)=={'cpu_light','ab_structure','plm_embed','cofold_heavy'}, r; assert r['cpu_light']['backend']=='local'" \
-  || fail "resource detector output malformed"
-pass "resource detector reports backends for all job classes"
+echo "[preflight] preflight.py"
+uv run scripts/preflight.py --json > "$TMP/pre.json" || true
+python3 -c "
+import json; d=json.load(open('$TMP/pre.json'))
+r=d['recommendations']
+assert set(r)=={'cpu_light','ab_structure','plm_embed','cofold_heavy'}, r
+assert r['cpu_light']['backend']=='local'
+assert d['tooling']['uv'], 'uv not detected'
+mods={p['module'] for p in d['packages']}
+assert {'Bio','numpy','modal'} <= mods, mods
+assert d['required_ok'] is True, d['action_items']
+" || fail "preflight output malformed"
+pass "preflight reports tooling, packages, GPU and backends"
+
+echo "[modal] cloud GPU app definitions"
+python3 -m py_compile modal/modal_chai1.py modal/modal_boltz.py \
+  || fail "modal app syntax error"
+grep -q "local_entrypoint" modal/modal_chai1.py && grep -q "local_entrypoint" modal/modal_boltz.py \
+  || fail "modal apps missing local_entrypoint"
+pass "modal Chai-1/Boltz apps compile and expose entrypoints"
 
 echo "[pre-flight b] blocked cofold_heavy emits a remediation ladder"
 python3 -c "
@@ -208,7 +223,7 @@ if 'cofold_heavy' in d['blocked_job_classes']:
 else:
     assert d['remediation']==[], 'remediation offered for a machine that is not blocked'
 " || fail "remediation ladder wrong"
-uv run scripts/detect_resources.py --json --no-network-check --modal yes > "$TMP/res_modal.json"
+uv run scripts/preflight.py --json --modal yes > "$TMP/res_modal.json"
 python3 -c "
 import json
 d=json.load(open('$TMP/res_modal.json'))

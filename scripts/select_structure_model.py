@@ -8,7 +8,7 @@ Model choice is by modality, not by taste:
 Both are `cofold_heavy` jobs and require a GPU. This script does not run them;
 it resolves the modality, writes the multi-chain FASTA in the right chain order,
 and reports which skill to load and whether this machine can execute it. Pair it
-with `detect_resources.py` for the backend decision (local GPU / Modal / web).
+with `preflight.py` for the backend decision (local GPU / Modal / web).
 
 Chain order in the emitted FASTA is the contract for everything downstream:
 chain A is the first record, B the second, and `analyze_interfaces.py` /
@@ -141,7 +141,7 @@ def main() -> None:
         "antibody_chains": chain_ids[:len(records)],
         "antigen_chains": chain_ids[len(records):],
         "next_steps": [
-            f"Run `detect_resources.py` once to choose the backend for cofold_heavy.",
+            f"Run `preflight.py` once to choose the backend for cofold_heavy.",
             f"Load the `{skill}` skill and predict {out.name} with {model}.",
             "Then: scan_surface_patches.py on the antibody chains "
             f"({', '.join(chain_ids[:len(records)])}) of the selected model.",
