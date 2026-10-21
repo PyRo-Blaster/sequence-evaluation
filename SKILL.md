@@ -142,8 +142,10 @@ uv run scripts/find_cdrs.py --seq EVQLVES...  --name "X"     # auto-detect chain
    uv run --with abnumber scripts/find_cdrs.py --vh EVQLVES... --name VH_B --scheme imgt
    ```
 2. **Anchor regex (fallback)** — no dependency, Kabat-compatible boundaries. The
-   output reports which engine ran. With the fallback, CDR1 and CDR2 are reliable;
-   the CDR3 N-terminal boundary may be ±1 for some VH sequences.
+   output reports which engine ran. CDR3 is anchored on the **conserved Cys**
+   (Cys92 heavy / Cys88 light) and the J-region `WGxGT`/`FGxGT` motif rather than
+   a literal `YYC`, so FR3 variants such as `VYFCAR`/`VYHCAR` are handled and the
+   Kabat CDR3 start is exact.
 
 `--scheme {kabat,imgt,chothia}` selects the numbering for the abnumber engine.
 See `references/antibody-numbering.md` for scheme comparison and VHH-specific notes.
@@ -207,6 +209,11 @@ cutoffs. Rules, weights, and severity are in `references/developability.md`.
 - **high** only when the patch has ≥3 residues and at least one is in a CDR.
 - A `coarse_model` warning means side chains are missing. Do not use that call.
 - State that the flag is for the selected model, not an experimental structure.
+
+The **conserved Fc glycan (EU N297)** is recognised by its `Q[YF]NST` context and
+reported with severity `expected` rather than `high`, and is never escalated by
+CDR proximity — it is required for FcγR binding and must not be engineered out
+unless aglycosylation is the goal. Only *other* sequons count as liabilities.
 
 ### Fc Mutation Mapping
 

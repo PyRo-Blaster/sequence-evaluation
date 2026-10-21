@@ -84,7 +84,29 @@ dg=[f for f in d['findings'] if f['motif']=='DG' and f.get('cdr')=='CDR-H3']
 assert dg and dg[0]['severity']=='high' and dg[0]['base_severity']=='medium', dg
 " || fail "CDR escalation did not fire"
 pass "CDR map built; CDR-H3 isomerization escalated medium->high"
+# conserved Fc N297 sequon must be labelled 'expected', not a liability
+python3 -c "
+import json; d=json.load(open('$TMP/liab.json'))
+hc=d['Trastuzumab_HC_full_IgG1']['findings']
+n297=[f for f in hc if f.get('fc_n297')]
+assert len(n297)==1, n297
+assert n297[0]['severity']=='expected', n297[0]
+assert not n297[0].get('escalated'), 'N297 must never be escalated'
+" || fail "Fc N297 not labelled expected"
+pass "conserved Fc N297 reported as expected, exempt from escalation"
 
+echo "[2b/6] find_cdrs.py CDR3 anchors (VYFCAR FR3 + Kabat H3 boundary)"
+# Trastuzumab VH with FR3 mutated YYCSR->YFCAR: reproduces the real-world
+# 'VYFCAR' case that the old literal-YYC anchor could not parse.
+VH_YFC=EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYFCARWGGDGFYAMDYWGQGTLVTVSS
+uv run scripts/find_cdrs.py --vh "$VH_YFC" --name YFC --json > "$TMP/yfc.json"
+python3 -c "import json; d=json.load(open('$TMP/yfc.json')); assert d['cdr3']=='WGGDGFYAMDY', d" \
+  || fail "VYFCAR-style FR3 not handled"
+TVH=EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS
+uv run scripts/find_cdrs.py --vh "$TVH" --name TVH --json > "$TMP/tvh.json"
+python3 -c "import json; d=json.load(open('$TMP/tvh.json')); assert d['cdr3']=='WGGDGFYAMDY', d" \
+  || fail "trastuzumab Kabat CDR-H3 boundary wrong"
+pass "CDR-H3 anchored on Cys92; YFC FR3 works; Kabat boundary exact"
 echo "[5/6] analyze_interfaces.py"
 uv run scripts/analyze_interfaces.py examples/mini_complex.cif --antibody A --antigen C \
   --cdr-json examples/mini_cdrs.json --json > "$TMP/iface.json"

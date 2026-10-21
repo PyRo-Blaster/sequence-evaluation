@@ -14,7 +14,10 @@ The `find_cdrs.py` script uses conserved anchor residues (not fixed positions) a
 
 - **VH CDR1**: residues between C22...C + 4 residues and the Trp that opens FR2
 - **VH CDR2**: between FR2-end and the conserved `RFTIS` motif
-- **VH CDR3**: between the second conserved Cys (in YYC) and the WGQG motif
+- **VH CDR3**: anchored on the conserved Cys92 (found as the last Cys before the
+  J-region) plus the two Kabat framework residues 93-94, ending at the `WGxGT`
+  motif. Not keyed to a literal `YYC`, so `VYFCAR`/`VYHCAR` FR3 variants work.
+- **VL CDR3**: conserved Cys88 to the `FGxGT` J-region motif
 
 ## EU Numbering for IgG1 Constant Region
 
