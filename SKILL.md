@@ -4,8 +4,9 @@ description: >
   Use when the user provides a protein FASTA file or amino acid sequence and wants
   sequence characterization, MW/pI calculation, antibody CDR identification,
   IgG Fc mutation mapping, homology search, antibody-antigen structure prediction,
-  interface contact analysis, or a consolidated sequence evaluation report. Prefer
-  for therapeutic antibodies, bispecifics, trispecifics, and nanobodies/VHH.
+  interface contact analysis, structure-based charged or hydrophobic surface
+  patches from a predicted Fv model, or a consolidated sequence evaluation report.
+  Prefer for therapeutic antibodies, bispecifics, trispecifics, and nanobodies/VHH.
 ---
 
 # Sequence Evaluation
@@ -25,15 +26,21 @@ models) **and only once per session** — cache the result and reuse it; the
 hardware does not change between calls.
 
 ```bash
-uv run scripts/detect_resources.py [--json]
+uv run scripts/detect_resources.py [--json] [--modal {auto,yes,no}]
 ```
 
-It reports GPU (NVIDIA / Apple MPS), CPU, RAM, Modal CLI availability, and
-network egress, then recommends a backend per job class:
+It reports GPU (NVIDIA / Apple MPS), CPU, RAM, Modal availability, and network
+egress, then recommends a backend per job class. **It checks local first** and
+only escalates when local cannot carry the job.
+
+`--modal auto` (the default) looks for the Modal CLI on PATH, which **misses a
+host-managed Modal target** configured under *Settings → Compute* — that one has
+no local CLI. After enabling Modal there, re-run with `--modal yes` and
+`cofold_heavy` routes to `modal` instead of `blocked`.
 
 | Job class | Tools | Routing rule |
 |-----------|-------|--------------|
-| `cpu_light` | properties, CDRs (regex), mutations, liabilities, interface geometry, ANARCI/abnumber, IgBLAST, BioPhi/OASis | **always local** — no GPU needed |
+| `cpu_light` | properties, CDRs (regex), mutations, sequence liabilities, surface-patch scan on an existing model, interface geometry, ANARCI/abnumber, IgBLAST, BioPhi/OASis | **always local** — no GPU needed |
 | `ab_structure` | IgFold, ImmuneBuilder, ABodyBuilder3, NanoBodyBuilder2, TAP | local GPU if present; else local CPU (slower, fine for a few sequences); else remote |
 | `plm_embed` | AbLang, AntiBERTy, language-model scores | local GPU if present; CPU acceptable for small batches |
 | `cofold_heavy` | Chai-1, Boltz-1/2, AlphaFold3, RFdiffusion/RFantibody, BindCraft | **GPU-required**: local GPU only if VRAM is sufficient (~16 GB+); else **Modal**; else a **web API/server** |
@@ -46,6 +53,22 @@ Decision flow for a GPU-required job:
    server, SAbPred webapps, HelixFold web) — see `references/structural-prediction.md`.
 4. **None of the above** → report `blocked`; tell the user what to enable rather
    than attempting a job that will OOM or hang.
+
+When a job class comes back `blocked`, the pre-flight prints a remediation
+ladder — Modal (recommended), a local CUDA GPU, a hosted web server, or an
+antibody-specific CPU model — each with the concrete action, where to do it, and
+whether it **changes which model runs** rather than just where it runs. The last
+two do. In `--json` the same list is under `remediation`, with
+`blocked_job_classes` alongside.
+
+**Nothing is enabled automatically.** Turning on a paid backend is the user's
+decision; the pre-flight reports and stops. An agent cannot enable Modal —
+`host.compute.create('modal')` raises `NotFound` until the user does.
+
+Once Modal is the chosen backend, follow
+`references/modal-structure-modeling.md`: which bundled env carries Chai-1 vs
+Boltz, the GPU tier, the weights volume, the job-time egress each declares, and
+the build-then-submit shape.
 
 Honour explicit user overrides (e.g. "force local" / "use Modal") over the
 auto-recommendation, and prefer a slower-but-local path over sending sequences to
@@ -66,6 +89,10 @@ uv run scripts/analyze_properties.py <input.fasta> \
 
 - `--signal-peptide`: Strip N-terminal signal peptide before calculating mature chain properties
 - `--complex`: Sum chains and solve for complex pI (binary search for net charge = 0)
+- `--stoichiometry NAME=N ...`: Copies of each chain in the assembly. **Pass this
+  for any homomeric assembly** — without it every chain counts once, so an IgG
+  FASTA (one HC + one LC) reports ~74 kDa instead of ~148 kDa. Applies to both
+  the MW sum and the complex-pI charge balance.
 - `--disulfide-bonds N`: Apply −2.016 Da correction per bond to complex MW
 - Reports **A280 (1 g/L, oxidized)** for concentration measurement, plus
   instability index (>40 = potentially unstable), aliphatic index, and GRAVY.
@@ -105,16 +132,59 @@ Run `scan_liabilities.py` on each chain (or the whole FASTA) to flag
 sequence-level chemical/PTM liabilities relevant to manufacturability:
 
 ```bash
-uv run scripts/scan_liabilities.py <input.fasta> [--signal-peptide MGW...] [--json]
+uv run scripts/scan_liabilities.py <input.fasta> [--signal-peptide MGW...] \
+    [--cdr-json cdrmap_seq.json] [--paratope-json iface.json] [--json]
 uv run scripts/scan_liabilities.py --seq EVQLVES... --name VH_A
 ```
 
 Flags N-glycosylation sequons (N-X-S/T), Asn deamidation (NG/NS…), Asp
 isomerization (DG/DS…), Asp-Pro fragmentation, Met/Trp oxidation hotspots, odd
 (unpaired) cysteine counts, and N-terminal pyroglutamate. Severity-ranked;
-positions are 1-based on the mature chain. Cross-reference high-severity hits in
-CDRs against the Stage 2 CDR output — liabilities inside a CDR are the highest
-priority to engineer out.
+positions are 1-based on the mature chain.
+
+**Pass `--cdr-json`.** The scan applies the CDR priority rule itself: a hit
+inside a CDR moves one step up the low→medium→high scale, and Met/Trp oxidation
+on a CDR that carries a paratope contact (`--paratope-json`) moves a second step.
+Each finding carries both `severity` and `base_severity`, so nothing is hidden.
+Keys in the CDR map must match the FASTA record ids being scanned — build it with
+`build_cdr_map.py HC=vh.json LC=vl.json`. Without the map every severity is the
+unescalated default and the output says so; do not do this join by hand.
+
+The `--paratope-json` link is **CDR-level, not residue-level**: structure
+residue numbers and 1-based mature-sequence positions are different coordinate
+systems and the scan does not pretend to reconcile them per residue.
+
+### Surface patches (needs a structure)
+
+Sequence motifs cannot show a charged patch or a hydrophobic surface patch.
+Run this **only after** a predicted Fv/Fab model exists (Stage 4, or a model
+the user supplied). If there is no structure, report the sequence liabilities
+and say surface patches are blocked — do not infer them from sequence.
+
+Name the antibody chains in `--chains`. Any other chain in the file (the
+antigen, a second Fab) is **detached before the SASA calculation**, so exposure
+is always that of the isolated antibody chains. Passing a cofolded complex is
+therefore safe — but the reported exposure is apo, not the bound state, which is
+the correct substrate for a developability question: a patch matters because it
+is exposed in the vial, not because it is buried against target.
+
+```bash
+uv run scripts/scan_surface_patches.py pred.model_idx_0.cif \
+    --chains A B \
+    --cdr-json cdrmap_chains.json \
+    [--json]
+```
+
+`--cdr-json` is `{chain: [{name, seq}]}` — build it with `build_cdr_map.py`
+rather than by hand, and use the same chain IDs as the cofolding FASTA. Method
+is `surface-patch-v1` (Shrake-Rupley relative SASA, side-chain centroid
+clustering). It reports positive-charge, negative-charge, and hydrophobic
+patches. It is **not** TAP PPC/PNC/PSH and **not** SAP — do not apply those
+cutoffs. Rules, weights, and severity are in `references/developability.md`.
+
+- **high** only when the patch has ≥3 residues and at least one is in a CDR.
+- A `coarse_model` warning means side chains are missing. Do not use that call.
+- State that the flag is for the selected model, not an experimental structure.
 
 ### Fc Mutation Mapping
 
@@ -155,18 +225,54 @@ report.
 After searches complete, review the returned summaries. If the hit descriptions
 are incomplete, resolve accessions with the `uniprot-database` skill.
 
-## Stage 4: Structural Prediction & Interface Analysis
+## Stage 4: Structural Prediction
 
 This is a `cofold_heavy` (GPU-required) job — run the compute pre-flight (once
 per session) and route per its recommendation (local GPU / Modal / web server). See
-`references/structural-prediction.md` for full guidance. Summary:
+`references/structural-prediction.md` for full guidance.
 
-1. **Prepare FASTAs** — one FASTA per complex (VHH + antigen, Fab VH + VL + antigen, etc.)
-2. **Run the cofolding model on the backend Stage 0 chose** — Chai-1 via Modal
-   (the `chai` + `modal` skills) when offloading; locally if a capable GPU is
-   present; or a web server (AlphaFold3 server, HelixFold) if no GPU/Modal
-3. **Check scores** — select best model by aggregate score (0.2×pTM + 0.8×ipTM); ipTM > 0.5 is confident
-4. **Analyze interface** with `analyze_interfaces.py`:
+### Model selection is by modality, not by taste
+
+| Input | Model | Skill |
+|-------|-------|-------|
+| VHH / nanobody (single domain) | **Boltz-1** | `boltz` |
+| Fab / Fv (VH + VL) | **Chai-1** | `chai` |
+
+Resolve it with the script rather than by hand — it also stages the FASTA in the
+chain order every downstream step depends on:
+
+```bash
+uv run scripts/select_structure_model.py --cdrs vh.json vl.json \
+    --seqs VH=vh.seq VL=vl.seq --out-fasta fv.fasta [--antigen antigen.fasta] [--json]
+```
+
+It reports the modality, the chosen model, the skill to load, the chain-ID map
+(A = first record, B = second, …) and the job class. A lone VH with no VL is
+rejected rather than guessed at — pass `--vhh` to `find_cdrs.py` if it is a
+single-domain antibody.
+
+**Predict the apo Fv/VHH unless you specifically need the complex.** Surface
+patches — the developability output — want the unbound antibody: a patch matters
+because it is exposed in the vial, not because it is buried against target. An
+antigen is only needed for interface work, which is no longer a report phase
+(see below).
+
+Steps:
+
+1. **Stage the FASTA** with `select_structure_model.py`
+2. **Run the chosen model** on the backend the pre-flight picked — Boltz-1 for VHH,
+   Chai-1 for Fab — locally with a capable GPU, else via Modal, else a web server
+3. **Check scores** — select the best model by aggregate score (0.2×pTM + 0.8×ipTM)
+4. **Scan surface patches** on that selected model (Phase 6 of the report)
+
+### Interface analysis (no longer a report phase)
+
+`analyze_interfaces.py` remains available for paratope/epitope work when a
+cofolded **antibody–antigen complex** exists, but it is deliberately not a
+report phase: it needs a complex prediction, which is a materially heavier job
+than the apo Fv the rest of the workflow runs on. Its output still feeds
+`scan_liabilities.py --paratope-json` to escalate oxidation hotspots on
+contact-bearing CDRs.
 
 ```bash
 uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
@@ -183,37 +289,77 @@ Chain IDs (A, B, C…) correspond to the order of sequences in the input FASTA.
   `find_cdrs.py --json` outputs) to label each paratope residue with its CDR and
   flag framework-mediated contacts.
 
-## Reporting
+5. **Scan surface patches** on that same selected model. Pass antibody chains
+   only — never the antigen. Command and severity rules are under Developability
+   Liability Scan. If a model exists and developability was requested, do not
+   stop after the interface table; if no model exists, do not invent patches.
+
+## Reporting — phased, with an opinion per phase
 
 Run each stage with `--json`, save the outputs, then assemble them
-deterministically with `compile_report.py`:
+deterministically with `compile_report.py`. Build the CDR map first: it is the
+input that lets the liability scan, the patch scan and the interface analysis
+all speak about CDRs instead of bare positions.
 
 ```bash
-uv run scripts/analyze_properties.py in.fasta --complex --json > props.json
+uv run scripts/analyze_properties.py in.fasta --complex --stoichiometry HC=2 LC=2 --json > props.json
 uv run scripts/find_cdrs.py --vh ... --name VH --json > vh.json
+uv run scripts/find_cdrs.py --vl ... --name VL --json > vl.json
+
+# One map, three consumers. Key it by whatever the consumer calls the chain:
+uv run scripts/build_cdr_map.py HC=vh.json LC=vl.json > cdrmap_seq.json    # FASTA record ids
+uv run scripts/build_cdr_map.py A=vl.json  B=vh.json > cdrmap_chains.json  # model chain ids
+
 uv run scripts/find_mutations.py "..." --label HC1 --json > hc1.json
-uv run scripts/scan_liabilities.py in.fasta --json > liab.json
-uv run scripts/analyze_interfaces.py model.cif --antibody A B --antigen C --json > iface.json
+uv run scripts/scan_liabilities.py in.fasta --cdr-json cdrmap_seq.json \
+    [--paratope-json iface.json] --json > liab.json
+uv run scripts/select_structure_model.py --cdrs vh.json vl.json \
+    --seqs VH=vh.seq VL=vl.seq --out-fasta fv.fasta        # -> Chai-1 (Fab) or Boltz-1 (VHH)
+# ... run that model on a GPU backend, then:
+uv run scripts/scan_surface_patches.py model.cif --chains A B \
+    --cdr-json cdrmap_chains.json --json > patches.json
 
 uv run scripts/compile_report.py --title "mAb-X evaluation" \
     --properties props.json --cdrs vh.json vl.json \
     --mutations hc1.json --liabilities liab.json \
-    --interfaces iface.json --homology homology_section.md > report.md
+    --patches patches.json \
+    --homology homology_section.md > report.md
 ```
 
-The compiler emits these sections (only for data provided):
+The report walks the molecule from triage to binder. **Every phase emits
+`**Findings**` (the data) and `**Assessment**` (what it means).** Phases with no
+input print `Not assessed — <reason>` and are listed again in the Verdict, so a
+missing input is visible rather than silently absent.
 
-1. **Chain Properties** — MW, pI, A280, instability
-2. **CDR Annotation** — CDR1/2/3 per domain, with the engine used
-3. **Fc Mutations** — EU-numbered table with functional annotation
-4. **Developability Liabilities** — severity-ranked per chain
-5. **Homology Search** — passed through as a Markdown section you write from the search results
-6. **Structural Predictions** — paratope/epitope with CDR tags
+| Phase | Reads | Assessment answers |
+|-------|-------|--------------------|
+| 1 Molecule Triage | properties, CDRs, mutations | what modality is this, is the chain composition coherent |
+| 2 Chain Properties | `analyze_properties.py` | anything outside the formulation/expression envelope |
+| 3 Domain Annotation | `find_cdrs.py` | can these CDR boundaries be trusted, which engine produced them |
+| 4 Engineering Audit | `find_mutations.py` | what the mutation set does; is the heterodimerization set coherent |
+| 5 Sequence Liabilities | `scan_liabilities.py` | which liabilities are in CDRs, what to engineer first |
+| 6 Structural Developability | `scan_surface_patches.py` | which patches touch a CDR, how model-dependent the call is |
+| 7 Lineage | `--homology` Markdown | origin and closest known molecules |
+| 8 Verdict | all of the above | ranked risk register and a STOP / ENGINEER / PROCEED call |
 
-Prepend a **Molecular Architecture** overview (chain composition, targets,
-binding domains) and present in a concise lab-note style for downstream design
-reviews. Homology search results (Stage 3) have no script, so write that section
-as Markdown and pass it via `--homology`.
+Phase 8 aggregates every risk raised by phases 1–7 into one table (severity,
+where, finding, suggested action) and returns an explicit call:
+
+- **STOP** — a construct error was found (e.g. knob without hole); fix before expression.
+- **ENGINEER** — at least one high-severity item to resolve.
+- **ENGINEER / ACCEPT WITH MONITORING** — only medium items.
+- **PROCEED** — nothing above low severity *in the phases that ran*.
+
+A **Provenance** block closes the report: timestamp, compiler version, every
+input file, complex stoichiometry, patch parameters, CDR engine and Fc reference
+isotype. Phase 1 replaces the hand-written Molecular Architecture overview —
+chain composition and modality are now derived, not typed.
+
+**The assessment layer is rule-derived and must stay that way.** The verdict
+strings come from thresholds in `references/`; do not edit them into free prose,
+and do not add a conclusion the JSON does not support. Homology (Phase 7) is the
+one hand-written section — state the engine (MMseqs2 or EBI BLAST) and the hit
+metrics there.
 
 ## Testing / Setup Check
 
@@ -224,6 +370,9 @@ dependencies work in a fresh environment (e.g. from a SessionStart hook):
 ```bash
 bash tests/smoke_test.sh
 ```
+
+Assert report text on a token that markdown emphasis cannot split — `**not** TAP`
+does not contain the substring `not TAP`.
 
 ## Detecting Antibody vs General Protein
 

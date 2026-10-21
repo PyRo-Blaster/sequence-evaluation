@@ -8,6 +8,7 @@
 - 识别抗体可变区 CDR（优先使用 abnumber/ANARCI，回退到锚点正则）
 - 映射 IgG Fc 突变并按 EU 编号解释，自动标注常见工程突变
 - 扫描可开发性序列风险（糖基化位点、脱酰胺、异构化、氧化等）
+- 在已有预测结构上标记 charged patch 与疏水表面 patch（不是 TAP / SAP）
 - 对变量区或一般蛋白做同源序列搜索
 - 组织抗体-抗原复合物结构预测
 - 分析 paratope / epitope 接触残基，并映射到 CDR
@@ -51,10 +52,13 @@
     ├── _common.py               # 共用工具（序列校验 / JSON）
     ├── analyze_interfaces.py
     ├── analyze_properties.py
-    ├── compile_report.py        # 由 JSON 汇总 Markdown 报告
+    ├── build_cdr_map.py         # 由 find_cdrs 输出拼装 CDR map（三处共用）
+    ├── select_structure_model.py # 按模态选结构预测模型（VHH→Boltz-1 / Fab→Chai-1）
+    ├── compile_report.py        # 由 JSON 汇总分阶段 Markdown 报告
     ├── find_cdrs.py
     ├── find_mutations.py
-    └── scan_liabilities.py      # 可开发性风险扫描
+    ├── scan_liabilities.py      # 可开发性序列风险扫描（支持 CDR 升级）
+    └── scan_surface_patches.py  # 结构表面 charged / hydrophobic patch
 ```
 
 所有脚本均支持 `--json` 输出，便于用 `compile_report.py` 自动汇总报告。
@@ -126,7 +130,18 @@ uv run scripts/find_mutations.py "<seq>" --isotype IgG4
 示例：
 
 ```bash
-uv run scripts/scan_liabilities.py input.fasta --json
+uv run scripts/build_cdr_map.py HC=vh.json LC=vl.json > cdrmap.json
+uv run scripts/scan_liabilities.py input.fasta --cdr-json cdrmap.json --json
+```
+
+传 `--cdr-json` 后，落在 CDR 内的风险自动升一级（氧化位点若还落在有接触的 CDR
+上再升一级）；不传则全部是默认等级，并会在输出里说明。
+
+有预测结构之后，再用 `scripts/scan_surface_patches.py` 扫抗体链（不要包含抗原）上的正/负电荷 patch 和疏水表面 patch。这是 `surface-patch-v1`，不是 TAP，也不是 SAP。没有结构时不要从序列推断 patch。
+
+```bash
+uv run scripts/scan_surface_patches.py pred.model_idx_0.cif \
+  --chains A B --cdr-json cdrs.json --json
 ```
 
 ### 5. 同源搜索
@@ -138,6 +153,19 @@ uv run scripts/scan_liabilities.py input.fasta --json
 - 辅助推断来源、家族和相似已知分子
 
 ### 6. 结构预测与界面分析
+
+结构预测模型按模态固定选择：**VHH / nanobody → Boltz-1**（`boltz` skill），
+**Fab / Fv（VH+VL）→ Chai-1**（`chai` skill）。用脚本解析并准备 FASTA，
+同时固定链顺序（A = 第一条记录）：
+
+```bash
+uv run scripts/select_structure_model.py --cdrs vh.json vl.json \
+  --seqs VH=vh.seq VL=vl.seq --out-fasta fv.fasta
+```
+
+默认预测 **apo** Fv/VHH：表面 patch 关心的是分子在制剂里暴露的表面，
+不是被抗原埋住的界面。界面分析（paratope/epitope）不再是报告阶段，
+需要抗原复合物时单独运行：
 
 结合 `chai` 和 `modal` skill：
 
@@ -176,13 +204,37 @@ uv run scripts/detect_resources.py
 
 对于抗体序列，通常按这个顺序使用：
 
-1. 运行理化性质分析
+1. 运行理化性质分析（多聚体务必传 `--stoichiometry`）
 2. 识别 VH / VL / VHH 的 CDR
-3. 检查 Fc 突变及功能含义
-4. 扫描可开发性序列风险
-5. 对变量区做同源搜索
-6. 如需结构层面解释，再做复合物预测和界面分析
-7. 用 `compile_report.py` 由各阶段 JSON 输出汇总 Markdown 报告
+3. 用 `build_cdr_map.py` 拼装 CDR map（后面三个脚本共用）
+4. 检查 Fc 突变及功能含义
+5. 扫描可开发性序列风险，并传 `--cdr-json` 让 CDR 内的风险自动升级
+6. 对变量区做同源搜索
+7. 如需结构层面解释，再做复合物预测、界面分析和表面 patch 扫描
+8. 用 `compile_report.py` 汇总为分阶段报告
+
+## 分阶段报告
+
+`compile_report.py` 输出 9 个阶段，**每个阶段都给出数据（Findings）和结论
+（Assessment）**，没有输入的阶段会显式写明 `Not assessed`，而不是悄悄省略：
+
+| 阶段 | 结论回答什么 |
+|---|---|
+| 1 Molecule Triage | 这是什么分子，链组成是否自洽 |
+| 2 Chain Properties | 有没有超出配方/表达的常规范围 |
+| 3 Domain Annotation | CDR 边界可不可信，用的哪个引擎 |
+| 4 Engineering Audit | 突变集做什么用；KiH 是否互补 |
+| 5 Sequence Liabilities | 哪些风险落在 CDR 内，先改哪个 |
+| 6 Structural Developability | 哪些 patch 碰到 CDR，对模型的依赖有多大 |
+| 7 Lineage | 来源与最接近的已知分子 |
+| 8 Verdict | 风险清单排序 + STOP / ENGINEER / PROCEED |
+
+第 8 阶段汇总前 7 阶段提出的所有风险，并给出明确结论；发现构建体错误
+（例如 knob 没有对应的 hole）时直接给 **STOP**。报告末尾的 Provenance 记录
+时间戳、各输入文件、复合体化学计量、patch 参数、CDR 引擎与 Fc 参考同种型。
+
+> Assessment 层是由 `references/` 里的阈值规则推导出来的，不要改成自由发挥的
+> 叙述，也不要加 JSON 支持不了的结论。
 
 对于一般蛋白，通常只需要：
 

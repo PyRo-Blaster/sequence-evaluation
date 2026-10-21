@@ -2,10 +2,23 @@
 
 ## Overview
 
-After sequence-level analysis, co-fold antibody-antigen complexes to predict
-binding modes, paratopes, and epitopes. The primary tool is **Chai-1** via Modal GPU
-(same setup used in the T002 trispecific antibody workflow). AlphaFold3 or
-Boltz-1 are alternatives.
+After sequence-level analysis, predict the antibody structure so the
+structure-dependent developability checks (surface patches) can run.
+
+**Model selection is fixed by modality:**
+
+| Input | Model | Skill |
+|-------|-------|-------|
+| VHH / nanobody (single domain) | **Boltz-1** | `boltz` |
+| Fab / Fv (VH + VL) | **Chai-1** | `chai` |
+
+Resolve and stage with `scripts/select_structure_model.py`, which also fixes the
+chain-ID order (A = first FASTA record) that every downstream script depends on.
+
+Predict the **apo** Fv/VHH by default. An antigen complex is only needed for
+paratope/epitope work, which is not a report phase — co-folding a complex is a
+materially heavier job and the surface-patch question is better answered on the
+unbound antibody anyway.
 
 ## Choosing a backend (run the pre-flight once)
 
@@ -105,6 +118,9 @@ predictions/
 ## Interface Analysis with `analyze_interfaces.py`
 
 After prediction, run `scripts/analyze_interfaces.py` to extract paratope/epitope residues.
+On the same selected model, run `scripts/scan_surface_patches.py --chains <antibody chains>`
+for charged and hydrophobic surface patches. Pass antibody chains only. See
+`references/developability.md`. Do not apply TAP or SAP cutoffs to that output.
 
 ```bash
 uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
