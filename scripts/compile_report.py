@@ -397,10 +397,9 @@ def phase_liabilities(r: Report, data):
         r.skipped("no scan_liabilities.py JSON supplied")
         return
 
-    # scan_liabilities.py emits {"chains": ..., "cysteine_assessment": ...};
-    # tolerate a flat {chain: result} mapping too rather than silently
-    # iterating the wrapper keys and reporting "no hits".
-    cys_assessment = data.get("cysteine_assessment") if isinstance(data, dict) else None
+    # scan_liabilities.py emits a flat {chain: result} mapping. Tolerate a
+    # {"chains": {...}} wrapper as well: iterating the wrapper keys by mistake
+    # prints "**chains** (? aa) / No hits" and silently drops every finding.
     data = data.get("chains", data) if isinstance(data, dict) else data
 
     any_cdr = any(res.get("cdr_annotated") for res in data.values())

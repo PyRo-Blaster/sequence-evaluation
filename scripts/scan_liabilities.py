@@ -159,7 +159,7 @@ def scan(seq: str, cdrs: list[dict] | None = None,
     # NOTE: an odd per-chain cysteine count is NORMAL for antibody chains,
     # because interchain disulfides pair with cysteines on *other* chains
     # (H-L and H-H). Parity is therefore only meaningful across the assembled
-    # molecule; see assess_cysteines() for the whole-input judgement.
+    # molecule; the report consumes assembly_cysteine_* for that judgement.
     cys_odd = len(cys_positions) % 2 == 1
 
     # N-terminal pyroglutamate from N-terminal Gln/Glu.

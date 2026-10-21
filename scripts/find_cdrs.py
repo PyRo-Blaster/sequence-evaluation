@@ -30,12 +30,6 @@ import argparse
 import re
 import sys
 
-from pathlib import Path
-
-# uv does not put the script's directory on sys.path (uv >=0.13), so make the
-# sibling _common module importable regardless of how this file is invoked.
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
 from _common import SequenceError, clean_sequence, emit_json
 
 VH_FR1 = ("EVQLVE", "QVQLVE", "QVQLQE", "QVQLQQ", "EVQLLE", "QVQLVQ")
@@ -68,27 +62,21 @@ def find_vh_cdrs(seq: str) -> tuple[str, str, str]:
     cdr2_end = fr2_end + m.start()
     cdr2 = seq[fr2_end:cdr2_end]
 
-    # FR3 ends at the conserved Cys92 (Kabat). The residue before it is an
-    # aromatic in essentially every human VH gene, but it is Tyr in most and Phe
-    # in a substantial minority (YYC vs YFC) — anchoring on `YY[CA]` silently
-    # failed on every YFC heavy chain. Anchor on the Cys and accept either.
-    cys2_match = re.search(r"[YFH]C", seq[cdr2_end:])
-    if not cys2_match:
-        # Last resort: the first cysteine in FR3 is Cys92 in a normal domain.
-        idx = seq.find("C", cdr2_end)
-        if idx == -1:
-            raise ValueError("could not find the conserved FR3 cysteine for CDR3 start")
-        cys_end = idx + 1 - cdr2_end
-    else:
-        cys_end = cys2_match.end()
-    # CDR-H3 begins three residues after that Cys (Cys, then the two FR3
-    # residues such as A-R), so skip two past the end of the anchor match.
-    cdr3_start = cdr2_end + cys_end + 2
+    # CDR-H3: bounded by the conserved Cys92 and the J-region WGxGT motif.
+    # Anchor on the Cys itself rather than a literal YYC, so FR3 variants such
+    # as VYFCAR / VYHCAR / FYCAR are handled. Kabat places two framework
+    # residues (93-94, typically AR/AK/TR/SR) between Cys92 and CDR-H3 start.
+    j_matches = list(re.finditer(r"WG.G[TAS]", seq))
+    if not j_matches:
+        raise ValueError("could not find WGxGT J-region anchor for CDR3 end")
+    cdr3_end = j_matches[-1].start()
 
-    wg_match = re.search(r"WG[QR]G", seq[cdr3_start:])
-    if not wg_match:
-        raise ValueError("could not find WGQG anchor for CDR3 end")
-    cdr3_end = cdr3_start + wg_match.start()
+    cys92 = seq.rfind("C", cdr2_end, cdr3_end)
+    if cys92 == -1:
+        raise ValueError("could not find conserved Cys92 before the J-region")
+    cdr3_start = cys92 + 3
+    if cdr3_start > cdr3_end:
+        raise ValueError("implausible CDR3 boundaries (Cys92 too close to J-region)")
     cdr3 = seq[cdr3_start:cdr3_end]
     return cdr1, cdr2, cdr3
 
@@ -112,51 +100,63 @@ def find_vl_cdrs(seq: str) -> tuple[str, str, str]:
     cdr2_start = fr2_anchor_end + iy_match.end()
     cdr2 = seq[cdr2_start : cdr2_start + 7]
 
-    # Same conserved-Cys logic as the heavy chain: accept YYC or YFC.
-    cys2_match = re.search(r"[YFH]C", seq[cdr2_start:])
-    if not cys2_match:
-        raise ValueError("could not find the conserved FR3 cysteine for VL CDR3 start")
-    cdr3_start = cdr2_start + cys2_match.end()
-    fgggt = re.search(r"[FW]G.G[TK]", seq[cdr3_start:])
-    if not fgggt:
-        raise ValueError("could not find FGxGT anchor for VL CDR3 end")
-    cdr3 = seq[cdr3_start : cdr3_start + fgggt.start()]
+    # CDR-L3: bounded by the conserved Cys88 and the J-region FGxGT motif.
+    # Anchored on the Cys itself (not a literal YYC) so YFC/FYC variants work.
+    # Kabat CDR-L3 starts immediately after Cys88 (no intervening framework).
+    j_matches = list(re.finditer(r"[FW]G.G[TKQ]", seq))
+    if not j_matches:
+        raise ValueError("could not find FGxGT J-region anchor for VL CDR3 end")
+    cdr3_end = j_matches[-1].start()
+
+    cys88 = seq.rfind("C", cdr2_start, cdr3_end)
+    if cys88 == -1:
+        raise ValueError("could not find conserved Cys88 before the J-region")
+    cdr3_start = cys88 + 1
+    if cdr3_start > cdr3_end:
+        raise ValueError("implausible CDR3 boundaries (Cys88 too close to J-region)")
+    cdr3 = seq[cdr3_start:cdr3_end]
     return cdr1, cdr2, cdr3
 
 
 def cdrs_via_abnumber(seq: str, scheme: str):
-    """Try abnumber/ANARCI. Returns (cdrs, chain_type) or None if unavailable."""
+    """Try abnumber/ANARCI.
+
+    Returns ((cdr1, cdr2, cdr3), chain_type) on success, or (None, reason) when
+    the engine is unusable so the caller can fall back to the regex anchors.
+
+    NOTE: importing `abnumber` is NOT sufficient. abnumber is a thin wrapper and
+    calls `anarci.anarci` lazily at Chain() time; the original ANARCI is not on
+    PyPI (conda-only, needs HMMER), so `pip install abnumber` alone yields a
+    ModuleNotFoundError at first use. That must degrade to the fallback, not
+    abort the run.
+    """
     try:
         from abnumber import Chain  # type: ignore
     except Exception:
-        return None
+        return None, "abnumber not installed"
     try:
         chain = Chain(seq, scheme=scheme)
-    except Exception as e:  # not a valid antibody domain for ANARCI
-        raise ValueError(f"abnumber could not parse sequence: {e}")
+    except (ImportError, ModuleNotFoundError) as e:
+        # abnumber present but its ANARCI backend is missing.
+        return None, (f"abnumber installed but backend unavailable ({e}); "
+                      "install ANARCI via conda: conda install -c bioconda anarci")
+    except Exception as e:
+        # ANARCI ran but could not number this sequence; the regex anchors may
+        # still succeed, so fall back rather than abort.
+        return None, f"abnumber could not number the sequence ({e})"
     ctype = "VL" if chain.chain_type in ("K", "L") else "VH"
     return (chain.cdr1_seq, chain.cdr2_seq, chain.cdr3_seq), ctype
 
 
 def annotate(seq: str, domain_type: str, scheme: str):
-    """Return (cdrs, engine, resolved_type).
-
-    The anchor-regex engine is a fallback for *both* abnumber being unavailable
-    and abnumber failing to parse the domain. Previously a parse failure aborted
-    the run, which made installing abnumber strictly worse for unusual domains.
-    """
-    degraded = ""
-    try:
-        ab = cdrs_via_abnumber(seq, scheme)
-    except ValueError as e:
-        ab = None
-        degraded = f" [abnumber present but could not parse: {e}]"
-    if ab is not None:
-        cdrs, detected = ab
-        return cdrs, f"abnumber/ANARCI ({scheme})", detected
+    """Return (cdrs, engine, resolved_type, note)."""
+    cdrs, info = cdrs_via_abnumber(seq, scheme)
+    if cdrs is not None:
+        return cdrs, f"abnumber/ANARCI ({scheme})", info, ""
+    note = "" if info == "abnumber not installed" else f"ANARCI unavailable: {info}"
     if domain_type == "VL":
-        return find_vl_cdrs(seq), "anchor-regex" + degraded, "VL"
-    return find_vh_cdrs(seq), "anchor-regex" + degraded, domain_type
+        return find_vl_cdrs(seq), "anchor-regex", "VL", note
+    return find_vh_cdrs(seq), "anchor-regex", domain_type, note
 
 
 def main() -> None:
@@ -189,7 +189,8 @@ def main() -> None:
         domain_type = detect_chain_type(seq)
 
     try:
-        cdrs, engine, resolved = annotate(seq, "VL" if domain_type == "VL" else domain_type, args.scheme)
+        cdrs, engine, resolved, note = annotate(
+            seq, "VL" if domain_type == "VL" else domain_type, args.scheme)
     except (ValueError, IndexError) as e:
         print(f"[!] CDR detection failed for {args.name}: {e}", file=sys.stderr)
         sys.exit(1)
@@ -201,13 +202,15 @@ def main() -> None:
     if args.json:
         emit_json({
             "name": args.name, "domain_type": display_type, "engine": engine,
-            "length": len(seq),
+            "engine_note": note, "length": len(seq),
             "cdr1": cdr1, "cdr2": cdr2, "cdr3": cdr3,
             "cdr1_len": len(cdr1), "cdr2_len": len(cdr2), "cdr3_len": len(cdr3),
         })
         return
 
     print(f"{args.name} ({display_type}), length {len(seq)} aa  [engine: {engine}]")
+    if note:
+        print(f"  note: {note}")
     print(f"  CDR1 ({len(cdr1):>2} aa): {cdr1}")
     print(f"  CDR2 ({len(cdr2):>2} aa): {cdr2}")
     print(f"  CDR3 ({len(cdr3):>2} aa): {cdr3}")

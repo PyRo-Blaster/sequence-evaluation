@@ -225,6 +225,11 @@ assert d['required_ok'] is True, d['action_items']
 " || fail "preflight output malformed"
 pass "preflight reports tooling, packages, GPU and backends"
 
+echo "[2c/6] ANARCI backend-missing fallback"
+python3 -I tests/test_anarci_fallback.py >/dev/null \
+  || fail "find_cdrs does not fall back when ANARCI backend is missing"
+pass "abnumber-without-anarci degrades to regex anchors with guidance"
+
 echo "[modal] cloud GPU app definitions"
 python3 -m py_compile modal/modal_chai1.py modal/modal_boltz.py \
   || fail "modal app syntax error"

@@ -74,6 +74,15 @@ VHH domains differ from VH in Framework 2 (Kabat positions 44–47):
 
 The `find_cdrs.py` script handles VHH identically to VH — the CDR boundaries are the same.
 
+## ANARCI availability
+
+`find_cdrs.py` prefers exact ANARCI numbering but needs **both** `abnumber`
+(PyPI) and the `anarci` backend (bioconda + HMMER; not on PyPI). Installing
+only `abnumber` leaves `Chain()` raising `No module named 'anarci'`; the script
+detects this and falls back to the conserved-Cys regex anchors, reporting the
+engine and the reason. The fallback reproduces Kabat CDR3 boundaries exactly on
+the sequences tested here.
+
 ## Isotype Differences (IgG1 / IgG2 / IgG4)
 
 `find_mutations.py` ships WT references for IgG1, IgG2 and IgG4 and auto-detects

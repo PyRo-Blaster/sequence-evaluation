@@ -48,8 +48,10 @@ PACKAGES = [
     {"module": "numpy",     "pip": "numpy>=1.26",     "tier": "required",
      "purpose": "interface distance math"},
     {"module": "abnumber",  "pip": "abnumber",        "tier": "antibody",
-     "purpose": "ANARCI Kabat/IMGT/Chothia CDR numbering (else regex fallback); "
-                "HEAVY: pulls anarcii+PyTorch, multi-GB first install"},
+     "purpose": "wrapper for exact Kabat/IMGT/Chothia numbering (needs anarci too)"},
+    {"module": "anarci",    "pip": "conda install -c bioconda anarci", "tier": "antibody",
+     "purpose": "ANARCI backend abnumber calls at runtime; NOT on PyPI (conda + HMMER). "
+                "Without it the regex fallback is used"},
     {"module": "modal",     "pip": "modal",           "tier": "backend",
      "purpose": "cloud GPU for Chai-1 / Boltz cofolding"},
     {"module": "torch",     "pip": "torch",           "tier": "local-gpu",
@@ -294,7 +296,8 @@ def remediation(blocked: list[str], modal: bool, network) -> list[dict]:
 
 
 def action_items(uv_ok, pkgs, modal_ready, rec) -> list[str]:
-    todo = []
+    todo: list[str] = []
+    missing_ab: list[str] = []
     if not uv_ok:
         todo.append("Install uv (required to run every script): "
                     "curl -LsSf https://astral.sh/uv/install.sh | sh")
@@ -305,11 +308,14 @@ def action_items(uv_ok, pkgs, modal_ready, rec) -> list[str]:
             todo.append(f"REQUIRED {p['module']}: pip install '{p['pip']}' "
                         f"(or install uv so scripts self-provision)")
         elif p["tier"] == "antibody":
-            todo.append(
-                f"Optional {p['module']}: only needed for exact ANARCI numbering; "
-                "the regex fallback handles standard and YFC-style frameworks. "
-                "First install pulls anarcii+PyTorch (multi-GB, can take tens of "
-                "minutes): uv run --with abnumber scripts/find_cdrs.py ...")
+            missing_ab.append(p["module"])
+    if missing_ab:
+        todo.append(
+            f"Optional exact ANARCI numbering (missing: {', '.join(missing_ab)}) — "
+            "needs BOTH pieces: `conda install -c bioconda anarci` (backend, not on "
+            "PyPI) + `pip install abnumber` (wrapper). Installing abnumber alone "
+            "does NOT enable it; find_cdrs.py detects that and falls back to the "
+            "regex anchors with a note.")
     if rec["cofold_heavy"]["backend"] in ("modal-setup", "blocked", "web-api"):
         if not any(p["module"] == "modal" and p["installed"] for p in pkgs):
             todo.append("Cloud GPU for Chai-1/Boltz: pip install modal  (then `modal token new`)")
