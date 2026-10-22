@@ -26,6 +26,13 @@ from dataclasses import dataclass
 from Bio.Data.IUPACData import protein_letters_3to1
 from Bio.PDB import MMCIFParser, NeighborSearch
 
+import sys
+from pathlib import Path
+
+# uv does not put the script's directory on sys.path (uv >=0.13), so make the
+# sibling _common module importable regardless of how this file is invoked.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from _common import emit_json
 
 _3to1 = {k.upper(): v for k, v in protein_letters_3to1.items()}

@@ -32,6 +32,12 @@ import sys
 
 from Bio.Align import PairwiseAligner
 
+from pathlib import Path
+
+# uv does not put the script's directory on sys.path (uv >=0.13), so make the
+# sibling _common module importable regardless of how this file is invoked.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from _common import SequenceError, clean_sequence, emit_json
 
 # WT human IgG1 constant region (IGHG1*01): CH1 + Hinge + CH2 + CH3.

@@ -30,6 +30,12 @@ import argparse
 import re
 import sys
 
+from pathlib import Path
+
+# uv does not put the script's directory on sys.path (uv >=0.13), so make the
+# sibling _common module importable regardless of how this file is invoked.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from _common import SequenceError, clean_sequence, emit_json
 
 VH_FR1 = ("EVQLVE", "QVQLVE", "QVQLQE", "QVQLQQ", "EVQLLE", "QVQLVQ")
@@ -62,10 +68,22 @@ def find_vh_cdrs(seq: str) -> tuple[str, str, str]:
     cdr2_end = fr2_end + m.start()
     cdr2 = seq[fr2_end:cdr2_end]
 
-    cys2_match = re.search(r"YY[CA]", seq[cdr2_end:])
+    # FR3 ends at the conserved Cys92 (Kabat). The residue before it is an
+    # aromatic in essentially every human VH gene, but it is Tyr in most and Phe
+    # in a substantial minority (YYC vs YFC) — anchoring on `YY[CA]` silently
+    # failed on every YFC heavy chain. Anchor on the Cys and accept either.
+    cys2_match = re.search(r"[YFH]C", seq[cdr2_end:])
     if not cys2_match:
-        raise ValueError("could not find YYC anchor for CDR3 start")
-    cdr3_start = cdr2_end + cys2_match.end() + 1
+        # Last resort: the first cysteine in FR3 is Cys92 in a normal domain.
+        idx = seq.find("C", cdr2_end)
+        if idx == -1:
+            raise ValueError("could not find the conserved FR3 cysteine for CDR3 start")
+        cys_end = idx + 1 - cdr2_end
+    else:
+        cys_end = cys2_match.end()
+    # CDR-H3 begins three residues after that Cys (Cys, then the two FR3
+    # residues such as A-R), so skip two past the end of the anchor match.
+    cdr3_start = cdr2_end + cys_end + 2
 
     wg_match = re.search(r"WG[QR]G", seq[cdr3_start:])
     if not wg_match:
@@ -94,9 +112,10 @@ def find_vl_cdrs(seq: str) -> tuple[str, str, str]:
     cdr2_start = fr2_anchor_end + iy_match.end()
     cdr2 = seq[cdr2_start : cdr2_start + 7]
 
-    cys2_match = re.search(r"YYC", seq[cdr2_start:])
+    # Same conserved-Cys logic as the heavy chain: accept YYC or YFC.
+    cys2_match = re.search(r"[YFH]C", seq[cdr2_start:])
     if not cys2_match:
-        raise ValueError("could not find YYC anchor for VL CDR3 start")
+        raise ValueError("could not find the conserved FR3 cysteine for VL CDR3 start")
     cdr3_start = cdr2_start + cys2_match.end()
     fgggt = re.search(r"[FW]G.G[TK]", seq[cdr3_start:])
     if not fgggt:
@@ -120,14 +139,24 @@ def cdrs_via_abnumber(seq: str, scheme: str):
 
 
 def annotate(seq: str, domain_type: str, scheme: str):
-    """Return (cdrs, engine, resolved_type)."""
-    ab = cdrs_via_abnumber(seq, scheme)
+    """Return (cdrs, engine, resolved_type).
+
+    The anchor-regex engine is a fallback for *both* abnumber being unavailable
+    and abnumber failing to parse the domain. Previously a parse failure aborted
+    the run, which made installing abnumber strictly worse for unusual domains.
+    """
+    degraded = ""
+    try:
+        ab = cdrs_via_abnumber(seq, scheme)
+    except ValueError as e:
+        ab = None
+        degraded = f" [abnumber present but could not parse: {e}]"
     if ab is not None:
         cdrs, detected = ab
         return cdrs, f"abnumber/ANARCI ({scheme})", detected
     if domain_type == "VL":
-        return find_vl_cdrs(seq), "anchor-regex", "VL"
-    return find_vh_cdrs(seq), "anchor-regex", domain_type
+        return find_vl_cdrs(seq), "anchor-regex" + degraded, "VL"
+    return find_vh_cdrs(seq), "anchor-regex" + degraded, domain_type
 
 
 def main() -> None:

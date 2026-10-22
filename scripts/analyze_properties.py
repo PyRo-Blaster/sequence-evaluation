@@ -20,6 +20,12 @@ from typing import NamedTuple
 from Bio import SeqIO
 from Bio.SeqUtils.ProtParam import ProteinAnalysis
 
+from pathlib import Path
+
+# uv does not put the script's directory on sys.path (uv >=0.13), so make the
+# sibling _common module importable regardless of how this file is invoked.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
 from _common import SequenceError, clean_sequence, emit_json
 
 # Molar extinction coefficients at 280 nm (M^-1 cm^-1), Pace et al. 1995.
@@ -87,9 +93,17 @@ def calc_chain(name: str, seq: str, signal_peptide: str) -> ChainProps:
     )
 
 
-def complex_pi(mature_seqs: list[str]) -> float:
+def complex_pi(mature_seqs: list[str], copies: list[int] | None = None) -> float:
+    """Solve for the pH at which the assembled complex carries zero net charge.
+
+    ``copies`` weights each chain by its stoichiometry; without it every chain
+    counts once, which is wrong for any homomeric assembly (an IgG is 2 HC + 2 LC).
+    """
+    weights = copies or [1] * len(mature_seqs)
+
     def net_charge(ph: float) -> float:
-        return sum(ProteinAnalysis(s).charge_at_pH(ph) for s in mature_seqs)
+        return sum(n * ProteinAnalysis(s).charge_at_pH(ph)
+                   for s, n in zip(mature_seqs, weights))
 
     lo, hi = 0.0, 14.0
     for _ in range(100):
@@ -120,6 +134,14 @@ def main() -> None:
         default=0,
         help="Number of disulfide bonds for MW correction (-2.016 Da each)",
     )
+    parser.add_argument(
+        "--stoichiometry",
+        nargs="*",
+        default=[],
+        metavar="NAME=N",
+        help="Copies of each chain in the assembled complex, e.g. HC=2 LC=2. "
+             "Without this every chain counts once, which halves the mass of an IgG.",
+    )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON")
     args = parser.parse_args()
 
@@ -143,16 +165,32 @@ def main() -> None:
         chains.append(props)
         mature_seqs.append(seq[len(signal):] if signal and seq.startswith(signal) else seq)
 
+    stoich: dict[str, int] = {}
+    for item in args.stoichiometry:
+        if "=" not in item:
+            parser.error(f"--stoichiometry expects NAME=N, got {item!r}")
+        key, _, val = item.partition("=")
+        try:
+            stoich[key] = int(val)
+        except ValueError:
+            parser.error(f"--stoichiometry copy number must be an integer, got {val!r}")
+    unknown = [k for k in stoich if k not in {c.name for c in chains}]
+    if unknown:
+        print(f"[!] --stoichiometry names not in the FASTA: {', '.join(unknown)}", file=sys.stderr)
+        sys.exit(1)
+
     complex_data = None
     if args.complex and len(chains) > 1:
-        total_mw = sum(p.mature_mw for p in chains)
+        copies = [stoich.get(p.name, 1) for p in chains]
+        total_mw = sum(n * p.mature_mw for p, n in zip(chains, copies))
         ds_correction = args.disulfide_bonds * 2.016
         complex_data = {
             "total_mw": total_mw,
+            "stoichiometry": ({p.name: n for p, n in zip(chains, copies)} if stoich else None),
             "disulfide_bonds": args.disulfide_bonds,
             "disulfide_correction": -ds_correction,
             "corrected_mw": total_mw - ds_correction,
-            "pi": complex_pi(mature_seqs),
+            "pi": complex_pi(mature_seqs, copies),
         }
 
     if args.json:
@@ -177,6 +215,11 @@ def main() -> None:
     if complex_data:
         print()
         print("=== Assembled Complex ===")
+        if complex_data.get("stoichiometry"):
+            print("Stoichiometry:           "
+                  + ", ".join(f"{k}x{v}" for k, v in complex_data["stoichiometry"].items()))
+        else:
+            print("Stoichiometry:           1 copy of each chain (assumed; pass --stoichiometry)")
         print(f"Total MW (sum):          {complex_data['total_mw']:>14,.2f} Da")
         if args.disulfide_bonds:
             print(f"Disulfide correction:    {complex_data['disulfide_correction']:>14,.2f} Da "
