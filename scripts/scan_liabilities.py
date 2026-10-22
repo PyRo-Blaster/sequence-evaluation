@@ -145,7 +145,10 @@ def scan(seq: str, cdrs: list[dict] | None = None,
                 "liability": label,
                 "severity": final,
                 "base_severity": severity,
-                "escalated": final != severity,
+                # Reclassifying the conserved Fc glycan as "expected" is a
+                # downgrade, not an escalation — it must not carry the
+                # escalation marker in the report.
+                "escalated": final != severity and not is_n297,
                 "position": position,
                 "in_cdr": cdr is not None,
                 "cdr": cdr,

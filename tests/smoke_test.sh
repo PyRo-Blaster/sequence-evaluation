@@ -256,7 +256,7 @@ pass "modal Chai-1/Boltz apps compile and expose entrypoints"
 echo "[pre-flight b] blocked cofold_heavy emits a remediation ladder"
 python3 -c "
 import json
-d=json.load(open('$TMP/res.json'))
+d=json.load(open('$TMP/pre.json'))
 if 'cofold_heavy' in d['blocked_job_classes']:
     fixes=d['remediation']
     assert fixes, 'blocked but no remediation offered'
