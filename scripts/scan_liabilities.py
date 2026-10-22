@@ -79,16 +79,25 @@ def _escalate(severity: str, steps: int = 1) -> str:
 def locate_cdrs(seq: str, cdrs: list[dict]) -> dict[int, str]:
     """Map 1-based sequence position -> CDR name by locating each CDR substring."""
     pos_to_cdr: dict[int, str] = {}
+    # CDRs occur in order along the chain, so advance a cursor rather than
+    # restarting find() from 0: a short CDR whose sequence also occurs earlier
+    # (or is repeated) would otherwise be mapped onto the wrong residues.
+    cursor = 0
     for cdr in cdrs or []:
         cdr_seq = (cdr.get("seq") or "").upper()
         name = cdr.get("name") or "CDR"
         if not cdr_seq:
             continue
-        i = seq.find(cdr_seq)
+        i = seq.find(cdr_seq, cursor)
         if i == -1:
-            continue
+            # Out of order or absent: fall back to a global search so a
+            # mis-ordered map still maps something instead of dropping it.
+            i = seq.find(cdr_seq)
+            if i == -1:
+                continue
         for offset in range(len(cdr_seq)):
             pos_to_cdr[i + offset + 1] = name
+        cursor = i + len(cdr_seq)
     return pos_to_cdr
 
 

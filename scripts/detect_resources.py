@@ -220,7 +220,16 @@ def main() -> None:
     ram_gb = detect_ram_gb()
     network = None if args.no_network_check else check_network()
     modal_cli = shutil.which("modal") is not None
-    modal = modal_cli if args.modal == "auto" else (args.modal == "yes")
+    # modal_source records HOW availability was established, so an explicit
+    # --modal yes is "asserted" even on a machine that also has the CLI (a
+    # host-managed Modal target has no CLI, which is why the flag exists).
+    if args.modal == "yes":
+        modal, modal_source = True, "asserted"
+    elif args.modal == "no":
+        modal, modal_source = False, "none"
+    else:  # auto
+        modal = modal_cli
+        modal_source = "cli" if modal_cli else "none"
     rec = recommend(gpus, cpu_count, network, modal)
     blocked = [job for job, info in rec.items() if info["backend"] == "blocked"]
     fixes = remediation(blocked, modal, network)
@@ -232,7 +241,7 @@ def main() -> None:
         "gpus": gpus,
         "modal_cli": modal_cli,
         "modal_available": modal,
-        "modal_source": "cli" if (modal and modal_cli) else ("asserted" if modal else "none"),
+        "modal_source": modal_source,
         "network_egress": network,
         "recommendations": rec,
         "blocked_job_classes": blocked,

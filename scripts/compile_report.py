@@ -76,7 +76,7 @@ class Report:
         self.out: list[str] = []
         self.title = title
         self.phase_no = 0
-        # Collected for Phase 9.
+        # Collected for the Verdict section.
         self.risks: list[dict] = []          # {severity, where, what, action}
         self.not_assessed: list[str] = []
         self.blocking: list[str] = []        # construct-level errors
