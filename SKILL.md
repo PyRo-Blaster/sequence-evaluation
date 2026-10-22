@@ -17,26 +17,45 @@ antibody sub-workflow. Stages can be run independently or as a full pipeline.
 All scripts accept `--json` for machine-readable output; pipe those into
 `compile_report.py` (see Reporting) for a deterministic final report.
 
-## Compute Resource Pre-flight (conditional — not every run)
+## Stage 0: Environment Preflight (run first)
 
-**Skip this entirely for sequence-only work** (Stages 1–3, liabilities,
-interface geometry — all CPU-light and always local). Run it **only when you are
-about to start a GPU/ML stage** (cofolding, Fv structure modeling, language
-models) **and only once per session** — cache the result and reuse it; the
-hardware does not change between calls.
+Run this **once at the start of a session**, before any analysis or prediction,
+to confirm the environment can actually do the work. It checks tooling, Python
+packages, and GPU compute in one pass, then recommends a backend per job class.
 
 ```bash
-uv run scripts/detect_resources.py [--json] [--modal {auto,yes,no}]
+uv run scripts/preflight.py                  # fast check
+uv run scripts/preflight.py --provision      # also verify uv can fetch core deps
+uv run scripts/preflight.py --check-network  # also probe outbound egress
+uv run scripts/preflight.py --modal yes      # assert a host-managed Modal target
+uv run scripts/preflight.py --json           # machine-readable
 ```
 
-It reports GPU (NVIDIA / Apple MPS), CPU, RAM, Modal availability, and network
-egress, then recommends a backend per job class. **It checks local first** and
-only escalates when local cannot carry the job.
+What it verifies:
+
+1. **Tooling** — `uv` on PATH (required: every script runs through it);
+   `nvidia-smi`; Modal availability **and whether it is authenticated**.
+2. **Packages** — per-package status and purpose. Core deps (`biopython`,
+   `numpy`) are declared inline in each script and auto-provisioned by `uv run`,
+   so they report `auto (uv)`; `--provision` proves that end to end. Optional
+   (`abnumber`/`anarci`) and backend (`modal`, `torch`, `chai_lab`, `boltz`)
+   packages are reported as installed/missing with the exact install command.
+3. **Compute** — GPU (NVIDIA via `nvidia-smi`, Apple MPS) with VRAM, CPU cores, RAM.
+
+Exit code is **0 when every required item is satisfied, 1 otherwise**, so it can
+gate a pipeline or CI job. It prints an **Action items** list (a remediation
+ladder when a job class is blocked) with the exact commands to fix anything missing.
 
 `--modal auto` (the default) looks for the Modal CLI on PATH, which **misses a
 host-managed Modal target** configured under *Settings → Compute* — that one has
 no local CLI. After enabling Modal there, re-run with `--modal yes` and
 `cofold_heavy` routes to `modal` instead of `blocked`.
+
+**It checks local first** and only escalates when local cannot carry the job.
+For sequence-only work the result is almost always `cpu_light -> local` and you
+can proceed immediately; re-run it only if the environment changes.
+
+Backend routing per job class:
 
 | Job class | Tools | Routing rule |
 |-----------|-------|--------------|
@@ -47,11 +66,14 @@ no local CLI. After enabling Modal there, re-run with `--modal yes` and
 
 Decision flow for a GPU-required job:
 
-1. **Local GPU with enough VRAM** → run locally.
-2. **No/insufficient local GPU, Modal configured** → offload via the `modal` skill.
-3. **No GPU, no Modal, network available** → use a hosted server (AlphaFold3
+1. **Local GPU with enough VRAM** (and `chai_lab`/`boltz` installed) → run locally.
+2. **No/insufficient local GPU, Modal authenticated** → offload with the ready-made
+   apps in `modal/` (see **Cloud GPU via Modal** below).
+3. **`modal` installed but not authenticated** → preflight reports `modal-setup`;
+   run `modal token new`.
+4. **No GPU, no Modal, network available** → use a hosted server (AlphaFold3
    server, SAbPred webapps, HelixFold web) — see `references/structural-prediction.md`.
-4. **None of the above** → report `blocked`; tell the user what to enable rather
+5. **None of the above** → report `blocked`; tell the user what to enable rather
    than attempting a job that will OOM or hang.
 
 When a job class comes back `blocked`, the pre-flight prints a remediation
@@ -114,14 +136,24 @@ uv run scripts/find_cdrs.py --seq EVQLVES...  --name "X"     # auto-detect chain
 
 **Two engines, auto-selected:**
 
-1. **abnumber/ANARCI (preferred)** — true Kabat/IMGT/Chothia numbering. Used
-   automatically when importable. Get it on the fly without a global install:
+1. **abnumber/ANARCI (preferred when available)** — true Kabat/IMGT/Chothia
+   numbering, used automatically when usable. **It needs two pieces**: the
+   `abnumber` wrapper *and* the ANARCI backend it calls at runtime. ANARCI is
+   **not on PyPI** (conda-only, needs HMMER), so `pip install abnumber` /
+   `uv run --with abnumber` on its own is **not** enough — `Chain()` then raises
+   `No module named 'anarci'`. `find_cdrs.py` detects exactly that and falls
+   back to the regex anchors **with an explanatory note**, rather than failing.
+   To actually enable it:
    ```bash
-   uv run --with abnumber scripts/find_cdrs.py --vh EVQLVES... --name VH_B --scheme imgt
+   conda install -c bioconda anarci   # backend (required)
+   pip install abnumber               # wrapper
+   uv run scripts/find_cdrs.py --vh EVQLVES... --name VH_B --scheme imgt
    ```
 2. **Anchor regex (fallback)** — no dependency, Kabat-compatible boundaries. The
-   output reports which engine ran. With the fallback, CDR1 and CDR2 are reliable;
-   the CDR3 N-terminal boundary may be ±1 for some VH sequences.
+   output reports which engine ran. CDR3 is anchored on the **conserved Cys**
+   (Cys92 heavy / Cys88 light) and the J-region `WGxGT`/`FGxGT` motif rather than
+   a literal `YYC`, so FR3 variants such as `VYFCAR`/`VYHCAR` are handled and the
+   Kabat CDR3 start is exact.
 
 `--scheme {kabat,imgt,chothia}` selects the numbering for the abnumber engine.
 See `references/antibody-numbering.md` for scheme comparison and VHH-specific notes.
@@ -186,6 +218,11 @@ cutoffs. Rules, weights, and severity are in `references/developability.md`.
 - A `coarse_model` warning means side chains are missing. Do not use that call.
 - State that the flag is for the selected model, not an experimental structure.
 
+The **conserved Fc glycan (EU N297)** is recognised by its `Q[YF]NST` context and
+reported with severity `expected` rather than `high`, and is never escalated by
+CDR proximity — it is required for FcγR binding and must not be engineered out
+unless aglycosylation is the goal. Only *other* sequons count as liabilities.
+
 ### Fc Mutation Mapping
 
 Run `find_mutations.py` with each full heavy chain sequence to identify all
@@ -229,7 +266,8 @@ are incomplete, resolve accessions with the `uniprot-database` skill.
 
 This is a `cofold_heavy` (GPU-required) job — run the compute pre-flight (once
 per session) and route per its recommendation (local GPU / Modal / web server). See
-`references/structural-prediction.md` for full guidance.
+`references/structural-prediction.md` and `references/modal-setup.md` for
+full guidance.
 
 ### Model selection is by modality, not by taste
 
@@ -293,6 +331,34 @@ Chain IDs (A, B, C…) correspond to the order of sequences in the input FASTA.
    only — never the antigen. Command and severity rules are under Developability
    Liability Scan. If a model exists and developability was requested, do not
    stop after the interface table; if no model exists, do not invent patches.
+
+### Cloud GPU via Modal (Chai-1 / Boltz)
+
+When the preflight says `cofold_heavy -> modal`, use the ready-made apps in
+`modal/` — no bespoke setup needed:
+
+```bash
+pip install modal && modal token new      # one time
+
+modal run modal/modal_chai1.py \
+    --input-faa fastas/vhh_antigen.fasta --out-dir predictions/vhh_antigen
+
+modal run modal/modal_boltz.py \
+    --input-path fastas/fab_antigen.fasta --out-dir predictions/fab_antigen
+```
+
+- Models run on a Modal GPU; mmCIF models and score files are streamed back to
+  `--out-dir`, ready for `analyze_interfaces.py`.
+- Weights are cached in a persistent Modal Volume, so only the first run pays
+  the download.
+- GPU is selected with `MODAL_GPU` (default `A100-40GB`; use `A100-80GB`/`H100`
+  for large complexes, `L4`/`A10G` to cut cost). Also `MODAL_TIMEOUT`,
+  `CHAI_VERSION`, `BOLTZ_SPEC`.
+- **Privacy:** Chai-1 is MSA-free, so sequences stay in your Modal workspace.
+  Boltz `--use-msa-server` is **off by default** because it sends sequences to
+  the public ColabFold MMseqs2 server — keep it off for confidential sequences.
+
+See `references/modal-setup.md` for GPU sizing, cost notes, and troubleshooting.
 
 ## Reporting — phased, with an opinion per phase
 

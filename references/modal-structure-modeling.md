@@ -13,7 +13,7 @@ How a `cofold_heavy` job reaches a GPU when this machine has none. Read
 ## The escalation chain
 
 ```
-detect_resources.py            (local first)
+preflight.py                   (local first)
    cofold_heavy -> local       GPU with >=16 GB VRAM present       -> run here
    cofold_heavy -> modal       no local GPU, Modal enabled         -> this file
    cofold_heavy -> web-api     no GPU, no Modal, network available -> hosted server
@@ -24,7 +24,7 @@ The pre-flight cannot see a host-managed Modal target — that one has no local
 CLI — so after enabling it, re-run with `--modal yes`:
 
 ```bash
-uv run scripts/detect_resources.py --modal yes
+uv run scripts/preflight.py --modal yes
 ```
 
 `cofold_heavy` then routes to `modal` instead of `blocked`. Enabling Modal is

@@ -84,7 +84,29 @@ dg=[f for f in d['findings'] if f['motif']=='DG' and f.get('cdr')=='CDR-H3']
 assert dg and dg[0]['severity']=='high' and dg[0]['base_severity']=='medium', dg
 " || fail "CDR escalation did not fire"
 pass "CDR map built; CDR-H3 isomerization escalated medium->high"
+# conserved Fc N297 sequon must be labelled 'expected', not a liability
+python3 -c "
+import json; d=json.load(open('$TMP/liab.json'))
+hc=d['Trastuzumab_HC_full_IgG1']['findings']
+n297=[f for f in hc if f.get('fc_n297')]
+assert len(n297)==1, n297
+assert n297[0]['severity']=='expected', n297[0]
+assert not n297[0].get('escalated'), 'N297 must never be escalated'
+" || fail "Fc N297 not labelled expected"
+pass "conserved Fc N297 reported as expected, exempt from escalation"
 
+echo "[2b/6] find_cdrs.py CDR3 anchors (VYFCAR FR3 + Kabat H3 boundary)"
+# Trastuzumab VH with FR3 mutated YYCSR->YFCAR: reproduces the real-world
+# 'VYFCAR' case that the old literal-YYC anchor could not parse.
+VH_YFC=EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYFCARWGGDGFYAMDYWGQGTLVTVSS
+uv run scripts/find_cdrs.py --vh "$VH_YFC" --name YFC --json > "$TMP/yfc.json"
+python3 -c "import json; d=json.load(open('$TMP/yfc.json')); assert d['cdr3']=='WGGDGFYAMDY', d" \
+  || fail "VYFCAR-style FR3 not handled"
+TVH=EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDGFYAMDYWGQGTLVTVSS
+uv run scripts/find_cdrs.py --vh "$TVH" --name TVH --json > "$TMP/tvh.json"
+python3 -c "import json; d=json.load(open('$TMP/tvh.json')); assert d['cdr3']=='WGGDGFYAMDY', d" \
+  || fail "trastuzumab Kabat CDR-H3 boundary wrong"
+pass "CDR-H3 anchored on Cys92; YFC FR3 works; Kabat boundary exact"
 echo "[5/6] analyze_interfaces.py"
 uv run scripts/analyze_interfaces.py examples/mini_complex.cif --antibody A --antigen C \
   --cdr-json examples/mini_cdrs.json --json > "$TMP/iface.json"
@@ -189,16 +211,52 @@ assert d['antibody_chains']==['A'], d
 grep -q "^>VHH|A" "$TMP/nb.fasta" || fail "staged FASTA missing chain-id header"
 pass "Fab -> Chai-1, VHH -> Boltz-1; chain IDs staged"
 
-echo "[pre-flight] detect_resources.py"
-uv run scripts/detect_resources.py --json --no-network-check > "$TMP/res.json"
-python3 -c "import json; d=json.load(open('$TMP/res.json')); r=d['recommendations']; assert set(r)=={'cpu_light','ab_structure','plm_embed','cofold_heavy'}, r; assert r['cpu_light']['backend']=='local'" \
-  || fail "resource detector output malformed"
-pass "resource detector reports backends for all job classes"
+echo "[preflight] preflight.py"
+uv run scripts/preflight.py --json > "$TMP/pre.json" || true
+python3 -c "
+import json; d=json.load(open('$TMP/pre.json'))
+r=d['recommendations']
+assert set(r)=={'cpu_light','ab_structure','plm_embed','cofold_heavy'}, r
+assert r['cpu_light']['backend']=='local'
+assert d['tooling']['uv'], 'uv not detected'
+mods={p['module'] for p in d['packages']}
+assert {'Bio','numpy','modal'} <= mods, mods
+assert d['required_ok'] is True, d['action_items']
+" || fail "preflight output malformed"
+pass "preflight reports tooling, packages, GPU and backends"
+
+echo "[2d/6] CDR3 must not truncate when CDR3 itself contains a cysteine"
+TVH_C=EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDCGFYAMDYWGQGTLVTVSS
+TVL_C=DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYCTPPTFGQGTKVEIK
+uv run scripts/find_cdrs.py --vh "$TVH_C" --name hcys --json > "$TMP/hcys.json"
+python3 -c "import json; d=json.load(open('$TMP/hcys.json')); assert d['cdr3']=='WGGDCGFYAMDY', d" \
+  || fail "CDR-H3 truncated by an internal cysteine"
+uv run scripts/find_cdrs.py --vl "$TVL_C" --name lcys --json > "$TMP/lcys.json"
+python3 -c "import json; d=json.load(open('$TMP/lcys.json')); assert d['cdr3']=='QQHYCTPPT', d" \
+  || fail "CDR-L3 truncated by an internal cysteine"
+# a CDR3 containing the J motif internally must not end the loop early
+TVH_J=EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGQGTYAMDYWGQGTLVTVSS
+uv run scripts/find_cdrs.py --vh "$TVH_J" --name hj --json > "$TMP/hj.json"
+python3 -c "import json; d=json.load(open('$TMP/hj.json')); assert d['cdr3']=='WGQGTYAMDY', d" \
+  || fail "internal J motif truncated CDR-H3"
+pass "forward Cys anchor + last J match survive Cys-in-CDR3 and internal WGQGT"
+
+echo "[2c/6] ANARCI backend-missing fallback"
+python3 -I tests/test_anarci_fallback.py >/dev/null \
+  || fail "find_cdrs does not fall back when ANARCI backend is missing"
+pass "abnumber-without-anarci degrades to regex anchors with guidance"
+
+echo "[modal] cloud GPU app definitions"
+python3 -m py_compile modal/modal_chai1.py modal/modal_boltz.py \
+  || fail "modal app syntax error"
+grep -q "local_entrypoint" modal/modal_chai1.py && grep -q "local_entrypoint" modal/modal_boltz.py \
+  || fail "modal apps missing local_entrypoint"
+pass "modal Chai-1/Boltz apps compile and expose entrypoints"
 
 echo "[pre-flight b] blocked cofold_heavy emits a remediation ladder"
 python3 -c "
 import json
-d=json.load(open('$TMP/res.json'))
+d=json.load(open('$TMP/pre.json'))
 if 'cofold_heavy' in d['blocked_job_classes']:
     fixes=d['remediation']
     assert fixes, 'blocked but no remediation offered'
@@ -208,7 +266,7 @@ if 'cofold_heavy' in d['blocked_job_classes']:
 else:
     assert d['remediation']==[], 'remediation offered for a machine that is not blocked'
 " || fail "remediation ladder wrong"
-uv run scripts/detect_resources.py --json --no-network-check --modal yes > "$TMP/res_modal.json"
+uv run scripts/preflight.py --json --modal yes > "$TMP/res_modal.json"
 python3 -c "
 import json
 d=json.load(open('$TMP/res_modal.json'))

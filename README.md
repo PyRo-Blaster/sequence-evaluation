@@ -5,7 +5,9 @@
 它适合在用户提供 FASTA 文件或氨基酸序列后，快速完成以下工作：
 
 - 计算分子量（MW）、等电点（pI）、消光系数 / A280 以及可开发性指标
-- 识别抗体可变区 CDR（优先使用 abnumber/ANARCI，回退到锚点正则）
+- 识别抗体可变区 CDR（可用时优先 abnumber/ANARCI，否则回退到锚点正则）
+  - 注意：ANARCI 不在 PyPI 上（需 `conda install -c bioconda anarci` + HMMER）。
+    仅安装 `abnumber` 不足以启用，脚本会检测到并回退到正则锚点并给出提示。
 - 映射 IgG Fc 突变并按 EU 编号解释，自动标注常见工程突变
 - 扫描可开发性序列风险（糖基化位点、脱酰胺、异构化、氧化等）
 - 在已有预测结构上标记 charged patch 与疏水表面 patch（不是 TAP / SAP）
@@ -182,20 +184,37 @@ uv run scripts/analyze_interfaces.py pred.model_idx_0.cif \
   --cutoff 5.0
 ```
 
-## 计算资源与后端选择
+## 环境预检与后端选择
 
-纯序列分析（理化性质、CDR、突变、可开发性、界面几何）无需此步骤。仅在即将运行
-GPU/机器学习阶段时执行一次（每个会话一次，结果可复用）：
+每个会话开始时先运行一次环境预检，它会一次性检查**工具链、Python 包和 GPU 算力**：
 
 ```bash
-uv run scripts/detect_resources.py
+uv run scripts/preflight.py                  # 快速检查
+uv run scripts/preflight.py --provision      # 另外验证 uv 能拉取核心依赖
+uv run scripts/preflight.py --check-network  # 另外探测外网连通性
 ```
+
+检查内容：`uv` 是否可用；Modal CLI 是否安装**并已认证**；`biopython`/`numpy`（由 uv
+按脚本内联依赖自动安装）、可选的 `abnumber`/`anarci`、以及 `modal`/`torch`/`chai_lab`/`boltz`；
+GPU 型号与显存、CPU 核数、内存。缺什么会直接给出安装命令；所有必需项满足时退出码为 0。
 
 它会报告 GPU（NVIDIA / Apple MPS）、CPU、内存、Modal CLI 与网络状况，并按任务类型给出建议：
 
 - 轻量 CPU 任务（理化性质、CDR、突变、可开发性、界面几何）→ **始终本地**
 - 抗体结构建模（IgFold/ImmuneBuilder 等）→ 有 GPU 用本地；否则 CPU（较慢）或远程
 - 复合物 cofolding（Chai-1/Boltz/AF3，**需要 GPU**）→ 本地显存足够则本地；否则 **Modal**；再否则 **Web API/服务器**
+
+### Modal 云端 GPU（Chai-1 / Boltz）
+
+```bash
+pip install modal && modal token new      # 一次性设置
+modal run modal/modal_chai1.py --input-faa in.fasta --out-dir predictions/x
+modal run modal/modal_boltz.py --input-path in.fasta --out-dir predictions/y
+```
+
+用 `MODAL_GPU` 选择 GPU（默认 `A100-40GB`）。权重缓存在持久化 Modal Volume 中。
+Chai-1 不使用 MSA 服务器；Boltz 的 `--use-msa-server` 默认关闭（会将序列发送到公共
+ColabFold 服务器）。详见 [modal-setup.md](./references/modal-setup.md)。
 
 > 原则：GPU 密集任务在本机不具备条件时，使用 Modal 或在线服务（如 AlphaFold3 server）；
 > 对敏感序列优先本地或 Modal，避免发送到第三方。
@@ -246,6 +265,7 @@ uv run scripts/detect_resources.py
 - [SKILL.md](./SKILL.md): skill 主说明
 - [antibody-numbering.md](./references/antibody-numbering.md): Kabat / IMGT / EU 编号说明
 - [developability.md](./references/developability.md): 可开发性风险说明
+- [modal-setup.md](./references/modal-setup.md): Modal 云端 GPU 配置（Chai-1 / Boltz）
 - [structural-prediction.md](./references/structural-prediction.md): Chai-1 结构预测与界面分析说明
 
 ## 使用建议

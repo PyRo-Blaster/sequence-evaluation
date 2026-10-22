@@ -6,14 +6,15 @@ liabilities. Severity is a default heuristic — solvent exposure and CDR locati
 
 | Liability | Motif | Default severity | Why it matters |
 |-----------|-------|------------------|----------------|
-| N-glycosylation sequon | `N-X-[ST]`, X≠P | high | N-linked glycosylation; expected at N297 in Fc, **unwanted** in Fab/CDRs (heterogeneity, altered binding) |
+| N-glycosylation sequon | `N-X-[ST]`, X≠P | high | N-linked glycosylation; **unwanted** in Fab/CDRs (heterogeneity, altered binding) |
+| Conserved Fc glycan | `Q[YF]NST` (EU N297) | expected | Detected and reported separately — normal and required for FcγR binding; do not remove unless aglycosylation is intended |
 | Deamidation (fast) | `NG` | high | Asn→iso-Asp/Asp; charge change, potency loss; NG is the fastest motif |
 | Deamidation (moderate) | `N[STNH]` | medium | Slower Asn deamidation |
 | Isomerization | `D[GSDHT]` | medium | Asp→iso-Asp; backbone kink, especially in CDRs |
 | Fragmentation | `DP` | medium | Acid-labile Asp-Pro bond; low-pH/formulation fragmentation |
 | Met oxidation | `M` | low | Oxidation under stress/light; severity depends on exposure (Fc M252/M428 are sensitive) |
 | Trp oxidation | `W` | low | Oxidation; high impact if in CDR (often a paratope residue) |
-| Unpaired cysteine | odd Cys count | — | Free thiol → mispairing, aggregation, heterogeneity |
+| Unpaired cysteine | odd Cys count **across the whole molecule** | — | Free thiol → mispairing, aggregation, heterogeneity. Judged on all supplied chains together: a lone heavy chain is legitimately odd because interchain disulfides pair with the light chain |
 | N-terminal pyroglutamate | N-term `Q`/`E` | — | Pyroglutamate formation; usually benign but a charge-variant source |
 
 ## Severity escalation (implemented, not advisory)
@@ -54,8 +55,10 @@ reconcile them per residue.
 - **Met/Trp oxidation** flags are low severity by default because most surface Met/Trp
   are tolerated; weight them up if the residue is a known paratope contact (see the
   `analyze_interfaces.py` paratope output).
-- **Odd cysteine count** almost always indicates an unpaired/engineered cysteine
-  (e.g. a site-specific conjugation handle) — confirm it is intentional.
+- **Odd cysteine count** is only meaningful for the assembled molecule. Supply
+  every chain (HC + LC) in one FASTA; an odd *total* then indicates a genuine
+  unpaired/engineered cysteine (e.g. a site-specific conjugation handle) —
+  confirm it is intentional. Per-chain odd counts are normal and not flagged.
 
 These are *flags for review*, not automatic rejections. Standard references:
 Jarasch et al. 2015 (mAbs developability), Lu et al. 2019.

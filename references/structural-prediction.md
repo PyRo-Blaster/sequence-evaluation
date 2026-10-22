@@ -20,15 +20,15 @@ paratope/epitope work, which is not a report phase — co-folding a complex is a
 materially heavier job and the surface-patch question is better answered on the
 unbound antibody anyway.
 
-## Choosing a backend (run the pre-flight once)
+## Choosing a backend (run the preflight first)
 
-Cofolding is GPU-required. The first time you reach a GPU stage in a session, run
-`scripts/detect_resources.py` once and reuse the result to route the job:
+Cofolding is GPU-required. Run `scripts/preflight.py` at the start of the
+session and route the job by its `cofold_heavy` recommendation:
 
 | Local resource | Recommended backend |
 |----------------|--------------------|
 | GPU with ~16 GB+ VRAM | Run Chai-1 / Boltz locally |
-| No/small GPU, Modal CLI configured | Offload to Modal (`chai` + `modal` skills) |
+| No/small GPU, Modal authenticated | `modal run modal/modal_chai1.py` or `modal/modal_boltz.py` (see `modal-setup.md`) |
 | No GPU, no Modal, network available | Web server: AlphaFold3 server, HelixFold-Multimer |
 | None of the above | Report `blocked`; do not attempt locally (will OOM/hang) |
 

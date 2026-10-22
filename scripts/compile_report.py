@@ -48,7 +48,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-SEV_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
+SEV_ORDER = {"high": 0, "medium": 1, "low": 2, "expected": 3, "info": 4}
 
 # Thresholds used by the assessment rules: the ProtParam conventions already
 # cited in SKILL.md.
@@ -397,6 +397,11 @@ def phase_liabilities(r: Report, data):
         r.skipped("no scan_liabilities.py JSON supplied")
         return
 
+    # scan_liabilities.py emits a flat {chain: result} mapping. Tolerate a
+    # {"chains": {...}} wrapper as well: iterating the wrapper keys by mistake
+    # prints "**chains** (? aa) / No hits" and silently drops every finding.
+    data = data.get("chains", data) if isinstance(data, dict) else data
+
     any_cdr = any(res.get("cdr_annotated") for res in data.values())
     r.findings()
     for name, res in data.items():
@@ -421,8 +426,10 @@ def phase_liabilities(r: Report, data):
             r.out.append("|-----|----------|-------|-----|-----------|")
             for f in notable:
                 sev = f["severity"] + ("\\*" if f.get("escalated") else "")
+                label = f["liability"] + (" — conserved Fc N297, expected"
+                                          if f.get("fc_n297") else "")
                 r.out.append(f"| {f['position']} | {sev} | `{f['motif']}` | "
-                             f"{f.get('cdr') or '—'} | {f['liability']} |")
+                             f"{f.get('cdr') or '—'} | {label} |")
             low_n = len(ranked) - len(notable)
             if low_n:
                 r.out.append(f"\n_{low_n} further low-severity hit(s) (unescalated "

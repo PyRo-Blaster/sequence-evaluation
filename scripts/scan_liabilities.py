@@ -101,6 +101,13 @@ def locate_cdrs(seq: str, cdrs: list[dict]) -> dict[int, str]:
     return pos_to_cdr
 
 
+# The conserved IgG Fc N-glycosylation sequon (EU N297) sits in EEQ[YF]NST.
+# It is expected and must not be engineered out unless aglycosylation is the
+# goal, so it is reported separately from unwanted (e.g. Fab) sequons and is
+# never escalated by CDR proximity.
+FC_N297_CONTEXT = re.compile(r"Q[YF]NST")
+
+
 def scan(seq: str, cdrs: list[dict] | None = None,
          contact_cdrs: set[str] | None = None) -> dict:
     """Scan one chain. ``cdrs`` escalates CDR-localised hits; ``contact_cdrs``
@@ -118,7 +125,15 @@ def scan(seq: str, cdrs: list[dict] | None = None,
             position = start + 1  # 1-based
             cdr = pos_to_cdr.get(position)
             final = severity
-            if cdr:
+            is_n297 = (label == "N-glycosylation sequon"
+                       and FC_N297_CONTEXT.match(seq, max(start - 2, 0)) is not None)
+            if is_n297:
+                # Conserved Fc glycan: expected, not a liability to remove, and
+                # exempt from CDR escalation.
+                final = "expected"
+                note = ("conserved Fc N-glycosylation site (EU N297) — expected; "
+                        "removing it aglycosylates the Fc and ablates FcgR binding")
+            elif cdr:
                 # references/developability.md: CDR-localised liabilities are the
                 # engineering priority, so they move one step up the scale.
                 final = _escalate(severity)
@@ -130,17 +145,25 @@ def scan(seq: str, cdrs: list[dict] | None = None,
                 "liability": label,
                 "severity": final,
                 "base_severity": severity,
-                "escalated": final != severity,
+                # Reclassifying the conserved Fc glycan as "expected" is a
+                # downgrade, not an escalation — it must not carry the
+                # escalation marker in the report.
+                "escalated": final != severity and not is_n297,
                 "position": position,
                 "in_cdr": cdr is not None,
                 "cdr": cdr,
                 "cdr_has_contact": bool(cdr and cdr in contact_cdrs),
+                "fc_n297": is_n297,
                 "motif": seq[start:start + span],
                 "note": note,
             })
 
     cys_positions = [i + 1 for i, c in enumerate(seq) if c == "C"]
-    cys_unpaired = len(cys_positions) % 2 == 1
+    # NOTE: an odd per-chain cysteine count is NORMAL for antibody chains,
+    # because interchain disulfides pair with cysteines on *other* chains
+    # (H-L and H-H). Parity is therefore only meaningful across the assembled
+    # molecule; the report consumes assembly_cysteine_* for that judgement.
+    cys_odd = len(cys_positions) % 2 == 1
 
     # N-terminal pyroglutamate from N-terminal Gln/Glu.
     nterm_pyroglu = seq[0] in "QE"
@@ -154,13 +177,14 @@ def scan(seq: str, cdrs: list[dict] | None = None,
         "findings": findings,
         "cysteines": cys_positions,
         "cysteine_count": len(cys_positions),
-        "odd_cysteine_count": cys_unpaired,
+        "odd_cysteine_count": cys_odd,
         "nterm_pyroglutamate": nterm_pyroglu,
         "nterm_residue": seq[0],
     }
 
 
-SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "info": 3}
+SEVERITY_ORDER = {"high": 0, "medium": 1, "low": 2, "expected": 3, "info": 4}
+
 
 
 def report(name: str, result: dict) -> None:
@@ -169,13 +193,12 @@ def report(name: str, result: dict) -> None:
     for f in result["findings"]:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
     summary = ", ".join(f"{counts[s]} {s}" for s in ("high", "medium", "low") if s in counts)
-    print(f"Liabilities: {summary or 'none in scanned categories'}")
+    print(f"Liabilities: {summary or 'none in scanned categories'}"
+          + (f"  (+{counts['expected']} expected Fc glycan)" if "expected" in counts else ""))
 
-    if result["odd_cysteine_count"]:
-        print(f"[!] ODD cysteine count ({result['cysteine_count']}) at positions "
-              f"{result['cysteines']}: likely an unpaired/free thiol.")
-    else:
-        print(f"Cysteines: {result['cysteine_count']} (even — consistent with full pairing)")
+    parity = "odd" if result["odd_cysteine_count"] else "even"
+    print(f"Cysteines: {result['cysteine_count']} ({parity} for this chain; "
+          "interchain partners may be on other chains)")
 
     if result["nterm_pyroglutamate"]:
         print(f"[!] N-terminal {result['nterm_residue']}: prone to pyroglutamate formation.")
