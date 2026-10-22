@@ -225,6 +225,22 @@ assert d['required_ok'] is True, d['action_items']
 " || fail "preflight output malformed"
 pass "preflight reports tooling, packages, GPU and backends"
 
+echo "[2d/6] CDR3 must not truncate when CDR3 itself contains a cysteine"
+TVH_C=EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGGDCGFYAMDYWGQGTLVTVSS
+TVL_C=DIQMTQSPSSLSASVGDRVTITCRASQDVNTAVAWYQQKPGKAPKLLIYSASFLYSGVPSRFSGSRSGTDFTLTISSLQPEDFATYYCQQHYCTPPTFGQGTKVEIK
+uv run scripts/find_cdrs.py --vh "$TVH_C" --name hcys --json > "$TMP/hcys.json"
+python3 -c "import json; d=json.load(open('$TMP/hcys.json')); assert d['cdr3']=='WGGDCGFYAMDY', d" \
+  || fail "CDR-H3 truncated by an internal cysteine"
+uv run scripts/find_cdrs.py --vl "$TVL_C" --name lcys --json > "$TMP/lcys.json"
+python3 -c "import json; d=json.load(open('$TMP/lcys.json')); assert d['cdr3']=='QQHYCTPPT', d" \
+  || fail "CDR-L3 truncated by an internal cysteine"
+# a CDR3 containing the J motif internally must not end the loop early
+TVH_J=EVQLVESGGGLVQPGGSLRLSCAASGFNIKDTYIHWVRQAPGKGLEWVARIYPTNGYTRYADSVKGRFTISADTSKNTAYLQMNSLRAEDTAVYYCSRWGQGTYAMDYWGQGTLVTVSS
+uv run scripts/find_cdrs.py --vh "$TVH_J" --name hj --json > "$TMP/hj.json"
+python3 -c "import json; d=json.load(open('$TMP/hj.json')); assert d['cdr3']=='WGQGTYAMDY', d" \
+  || fail "internal J motif truncated CDR-H3"
+pass "forward Cys anchor + last J match survive Cys-in-CDR3 and internal WGQGT"
+
 echo "[2c/6] ANARCI backend-missing fallback"
 python3 -I tests/test_anarci_fallback.py >/dev/null \
   || fail "find_cdrs does not fall back when ANARCI backend is missing"

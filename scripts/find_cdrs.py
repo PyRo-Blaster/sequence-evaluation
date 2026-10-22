@@ -49,6 +49,48 @@ def detect_chain_type(seq: str) -> str:
     return "VH"
 
 
+# A CDR3 longer than this almost certainly means the J-region anchor matched
+# somewhere outside the variable domain (e.g. a full heavy chain was passed).
+MAX_CDR3_LEN = 40
+
+
+def _conserved_cys(seq: str, search_from: int) -> int:
+    """Index of the conserved FR3 cysteine (Cys92 heavy / Cys88 light).
+
+    Searches forward from the end of CDR2 so a cysteine *inside* CDR3 can never
+    be mistaken for the framework anchor. Prefers the aromatic context
+    [YFH]C (YYC / YFC / YHC) and falls back to the first plain Cys.
+    """
+    m = re.search(r"[YFH]C", seq[search_from:])
+    if m:
+        return search_from + m.end() - 1
+    idx = seq.find("C", search_from)
+    if idx == -1:
+        raise ValueError("could not find the conserved FR3 cysteine for CDR3 start")
+    return idx
+
+
+def _j_region(seq: str, cdr3_start: int, pattern: str, label: str) -> int:
+    """Index where CDR3 ends, i.e. the start of the J-region motif.
+
+    Takes the LAST match at or after cdr3_start, so a CDR3 that happens to
+    contain the motif internally does not truncate the loop. A resulting CDR3
+    longer than MAX_CDR3_LEN means the anchor landed outside the variable
+    domain, which is reported rather than silently returned.
+    """
+    matches = [m for m in re.finditer(pattern, seq) if m.start() >= cdr3_start]
+    if not matches:
+        raise ValueError(f"could not find {label} J-region anchor for CDR3 end")
+    cdr3_end = matches[-1].start()
+    if cdr3_end < cdr3_start:
+        raise ValueError("implausible CDR3 boundaries (Cys too close to J-region)")
+    if cdr3_end - cdr3_start > MAX_CDR3_LEN:
+        raise ValueError(
+            f"CDR3 would be {cdr3_end - cdr3_start} aa (>{MAX_CDR3_LEN}); pass a "
+            "variable domain only, not a full chain")
+    return cdr3_end
+
+
 def find_vh_cdrs(seq: str) -> tuple[str, str, str]:
     """Return (CDR1, CDR2, CDR3) for a VH or VHH sequence (anchor method)."""
     cys1 = seq.index("C", 15)
@@ -63,20 +105,16 @@ def find_vh_cdrs(seq: str) -> tuple[str, str, str]:
     cdr2 = seq[fr2_end:cdr2_end]
 
     # CDR-H3: bounded by the conserved Cys92 and the J-region WGxGT motif.
-    # Anchor on the Cys itself rather than a literal YYC, so FR3 variants such
-    # as VYFCAR / VYHCAR / FYCAR are handled. Kabat places two framework
-    # residues (93-94, typically AR/AK/TR/SR) between Cys92 and CDR-H3 start.
-    j_matches = list(re.finditer(r"WG.G[TAS]", seq))
-    if not j_matches:
-        raise ValueError("could not find WGxGT J-region anchor for CDR3 end")
-    cdr3_end = j_matches[-1].start()
-
-    cys92 = seq.rfind("C", cdr2_end, cdr3_end)
-    if cys92 == -1:
-        raise ValueError("could not find conserved Cys92 before the J-region")
+    # Search FORWARD for the Cys: the first conserved Cys after FR3 starts is
+    # Cys92. (Searching backwards from the J-region is wrong — a CDR3 that
+    # itself contains a cysteine, common in disulfide-bonded VHH/bovine H3
+    # loops, would capture that one and truncate the loop.)
+    # Accept YC/FC/HC so FR3 variants VYFCAR / VYHCAR work, not just YYC.
+    cys92 = _conserved_cys(seq, cdr2_end)
+    # Kabat places two framework residues (93-94, typically AR/AK/TR/SR)
+    # between Cys92 and the CDR-H3 start.
     cdr3_start = cys92 + 3
-    if cdr3_start > cdr3_end:
-        raise ValueError("implausible CDR3 boundaries (Cys92 too close to J-region)")
+    cdr3_end = _j_region(seq, cdr3_start, r"WG.G[TAS]", "WGxGT")
     cdr3 = seq[cdr3_start:cdr3_end]
     return cdr1, cdr2, cdr3
 
@@ -101,19 +139,12 @@ def find_vl_cdrs(seq: str) -> tuple[str, str, str]:
     cdr2 = seq[cdr2_start : cdr2_start + 7]
 
     # CDR-L3: bounded by the conserved Cys88 and the J-region FGxGT motif.
-    # Anchored on the Cys itself (not a literal YYC) so YFC/FYC variants work.
+    # Forward search for the same reason as the heavy chain (a Cys inside
+    # CDR-L3 must not be mistaken for the framework anchor).
+    cys88 = _conserved_cys(seq, cdr2_start)
     # Kabat CDR-L3 starts immediately after Cys88 (no intervening framework).
-    j_matches = list(re.finditer(r"[FW]G.G[TKQ]", seq))
-    if not j_matches:
-        raise ValueError("could not find FGxGT J-region anchor for VL CDR3 end")
-    cdr3_end = j_matches[-1].start()
-
-    cys88 = seq.rfind("C", cdr2_start, cdr3_end)
-    if cys88 == -1:
-        raise ValueError("could not find conserved Cys88 before the J-region")
     cdr3_start = cys88 + 1
-    if cdr3_start > cdr3_end:
-        raise ValueError("implausible CDR3 boundaries (Cys88 too close to J-region)")
+    cdr3_end = _j_region(seq, cdr3_start, r"[FW]G.G[TKQ]", "FGxGT")
     cdr3 = seq[cdr3_start:cdr3_end]
     return cdr1, cdr2, cdr3
 

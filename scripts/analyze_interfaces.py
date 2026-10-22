@@ -68,15 +68,26 @@ def _cdr_ranges(structure_model, ab_chains, cdr_map):
         if cid not in structure_model or cid not in cdr_map:
             continue
         seq, nums = _chain_sequence(structure_model[cid])
+        # CDRs occur in order along the chain, so advance a cursor instead of
+        # restarting find() from 0 each time: a short CDR whose sequence also
+        # appears earlier (or is repeated) would otherwise be mapped to the
+        # wrong residues.
+        cursor = 0
         for cdr in cdr_map[cid]:
             cdr_seq = cdr.get("seq", "")
             if not cdr_seq:
                 continue
-            i = seq.find(cdr_seq)
+            i = seq.find(cdr_seq, cursor)
             if i == -1:
-                continue
+                # Out-of-order or absent: fall back to a global search so a
+                # mis-ordered map still maps something, rather than silently
+                # dropping the CDR.
+                i = seq.find(cdr_seq)
+                if i == -1:
+                    continue
             for resnum in nums[i:i + len(cdr_seq)]:
                 lookup[(cid, resnum)] = cdr["name"]
+            cursor = i + len(cdr_seq)
     return lookup
 
 
